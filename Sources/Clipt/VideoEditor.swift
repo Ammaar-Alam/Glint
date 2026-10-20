@@ -437,6 +437,26 @@ final class VideoEditorWindowController: NSWindowController, NSWindowDelegate, E
     func windowWillClose(_ notification: Notification) { model.shutdown() }
 }
 
+struct VideoPlaybackView: NSViewRepresentable {
+    let player: AVPlayer
+
+    func makeNSView(context: Context) -> AVPlayerView {
+        let view = AVPlayerView(frame: .zero)
+        view.controlsStyle = .none
+        view.videoGravity = .resizeAspect
+        view.player = player
+        return view
+    }
+
+    func updateNSView(_ view: AVPlayerView, context: Context) {
+        if view.player !== player { view.player = player }
+    }
+
+    static func dismantleNSView(_ view: AVPlayerView, coordinator: ()) {
+        view.player = nil
+    }
+}
+
 struct VideoEditorView: View {
     @Bindable var model: VideoEditorModel
 
@@ -464,7 +484,7 @@ struct VideoEditorView: View {
                 HSplitView {
                     VStack(spacing: 0) {
                         ZStack {
-                            VideoPlayer(player: model.player)
+                            VideoPlaybackView(player: model.player).allowsHitTesting(false)
                             if let zoom = model.pickingZoom {
                                 GeometryReader { geometry in
                                     Color.clear.contentShape(Rectangle()).onTapGesture { point in

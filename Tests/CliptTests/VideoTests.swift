@@ -1,10 +1,62 @@
 import XCTest
+import AppKit
 import AVFoundation
+import AVKit
 import CoreImage
 import ImageIO
+import SwiftUI
 @testable import Clipt
 
 final class VideoTests: XCTestCase {
+    @MainActor
+    func testVideoEditorCreatesNativePlaybackViewOffscreen() async throws {
+        let root = try Self.directory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let package = root.appendingPathComponent("recording.cliptvideo", isDirectory: true)
+        try FileManager.default.createDirectory(at: package, withIntermediateDirectories: false)
+        try await Self.movie(at: package.appendingPathComponent("screen.mov"))
+        var project = VideoProject(duration: 1, width: 96, height: 64, frameRate: 10)
+        project.edits.maximumDimension = 320
+        try project.save(to: package)
+        let model = VideoEditorModel(url: package) { _ in }
+        defer { model.shutdown() }
+        model.load()
+        let deadline = Date().addingTimeInterval(5)
+        while model.project == nil && model.errorMessage == nil && Date() < deadline { try await Task.sleep(for: .milliseconds(10)) }
+        _ = try XCTUnwrap(model.project)
+        let host = NSHostingView(rootView: AnyView(VideoEditorView(model: model)))
+        host.frame = NSRect(x: 0, y: 0, width: 1000, height: 700)
+        host.layoutSubtreeIfNeeded()
+        let native = try XCTUnwrap(Self.nativePlayer(in: host))
+        XCTAssertTrue(native.player === model.player)
+        XCTAssertEqual(native.controlsStyle, .none)
+        XCTAssertEqual(native.videoGravity, .resizeAspect)
+        host.rootView = AnyView(EmptyView())
+        host.layoutSubtreeIfNeeded()
+        try await Task.sleep(for: .milliseconds(20))
+        XCTAssertNil(native.player)
+    }
+
+    @MainActor
+    func testNativePlaybackUpdatesTheSuppliedPlayer() async throws {
+        let first = AVPlayer(), replacement = AVPlayer()
+        let host = NSHostingView(rootView: VideoPlaybackView(player: first))
+        host.frame = NSRect(x: 0, y: 0, width: 640, height: 360)
+        host.layoutSubtreeIfNeeded()
+        let native = try XCTUnwrap(Self.nativePlayer(in: host))
+        XCTAssertTrue(native.player === first)
+        host.rootView = VideoPlaybackView(player: replacement)
+        host.layoutSubtreeIfNeeded()
+        try await Task.sleep(for: .milliseconds(20))
+        XCTAssertTrue(native.player === replacement)
+    }
+
+    @MainActor
+    private static func nativePlayer(in view: NSView) -> AVPlayerView? {
+        if let player = view as? AVPlayerView { return player }
+        return view.subviews.lazy.compactMap { nativePlayer(in: $0) }.first
+    }
+
     func testOverlappingCutsMapEditedTimeToOriginalFrames() throws {
         var project = VideoProject(duration: 10, width: 1920, height: 1080)
         project.edits.trimStart = 1; project.edits.trimEnd = 9
