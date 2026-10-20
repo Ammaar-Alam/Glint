@@ -38,7 +38,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var terminationTask: Task<Void, Never>?
     private var pendingWrites = 0
     private var clipboardTask: Task<Void, Never>?
-    private var clipboardGeneration = 0
     private var recordingHiddenWindows: [NSWindow] = []
 
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -397,13 +396,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     func copy(_ item: CaptureItem) {
         clipboardTask?.cancel()
-        clipboardGeneration += 1
-        let generation = clipboardGeneration
-        let changeCount = NSPasteboard.general.changeCount
+        let clipboard = ClipboardWriter.general
+        let request = clipboard.begin()
         if item.kind.isVideo {
             if item.kind == .videoProject { edit(item); return }
-            NSPasteboard.general.clearContents()
-            NSPasteboard.general.writeObjects([item.url(in: library.root) as NSURL])
+            clipboard.commit(request) { _ = $0.writeObjects([item.url(in: library.root) as NSURL]) }
             return
         }
         clipboardTask = Task {
@@ -417,9 +414,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                     guard CGImageDestinationFinalize(dest) else { throw CliptError.message("The image couldn’t be copied.") }
                     return output as Data
                 }.value
-                guard !Task.isCancelled, clipboardGeneration == generation, NSPasteboard.general.changeCount == changeCount else { return }
-                NSPasteboard.general.clearContents()
-                NSPasteboard.general.setData(data, forType: .png)
+                guard !Task.isCancelled else { return }
+                try clipboard.commit(request) {
+                    guard $0.setData(data, forType: .png) else { throw CliptError.message("The image couldn’t be copied.") }
+                }
             } catch is CancellationError {} catch { showError(error) }
         }
     }
@@ -490,9 +488,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     private func showRecognizedText(_ text: String) {
         clipboardTask?.cancel()
-        clipboardGeneration += 1
-        NSPasteboard.general.clearContents()
-        NSPasteboard.general.setString(text, forType: .string)
+        let clipboard = ClipboardWriter.general
+        clipboard.commit(clipboard.begin()) { _ = $0.setString(text, forType: .string) }
         let window = makeWindow(title: "Captured Text", size: NSSize(width: 560, height: 360), root: OCRResultView(text: text))
         let controller = NSWindowController(window: window)
         editors.append(controller)
