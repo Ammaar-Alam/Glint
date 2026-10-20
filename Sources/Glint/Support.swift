@@ -7,6 +7,15 @@ protocol EditorClosing {
     func prepareToClose() async -> Bool
 }
 
+extension NSColor {
+    // bright cyan on dark surfaces, deeper teal on light ones so contrast holds
+    static let glint = NSColor(name: "glint") { appearance in
+        appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+            ? NSColor(srgbRed: 0.13, green: 0.89, blue: 0.96, alpha: 1)
+            : NSColor(srgbRed: 0.04, green: 0.58, blue: 0.65, alpha: 1)
+    }
+}
+
 enum GlintError: LocalizedError {
     case message(String)
 

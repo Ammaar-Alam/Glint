@@ -54,7 +54,7 @@ final class QuickAccessPanel: NSPanel {
         isReleasedWhenClosed = false
         isOpaque = false
         backgroundColor = .clear
-        hasShadow = true
+        hasShadow = false
         animationBehavior = .none
         title = "Recent Captures"
         setAccessibilityLabel("Recent Captures")
@@ -71,7 +71,7 @@ final class QuickAccessPanel: NSPanel {
         shelf.insert(item.id)
         lastInteraction = Date()
         rebuild()
-        orderFrontRegardless()
+        show()
         startDismissTimer()
     }
 
@@ -131,8 +131,13 @@ final class QuickAccessPanel: NSPanel {
             shelf.insert(item.id)
         }
         rebuild()
-        if !shelf.ids.isEmpty { orderFrontRegardless(); startDismissTimer() }
+        if !shelf.ids.isEmpty { show(); startDismissTimer() }
     }
+
+    private static let cardSize = CGSize(width: 232, height: 146)
+    private static let gap: CGFloat = 10
+    // room for card shadows inside the transparent panel
+    private static let inset: CGFloat = 14
 
     private func rebuild() {
         guard !shelf.ids.isEmpty, !isCaptureSuppressed else {
@@ -141,97 +146,83 @@ final class QuickAccessPanel: NSPanel {
             dismissTimer = nil
             return
         }
-        let rows = NSStackView()
-        rows.orientation = .vertical
-        rows.alignment = .leading
-        rows.spacing = 8
-        rows.edgeInsets = NSEdgeInsets(top: 10, left: 10, bottom: 10, right: 10)
-        for id in shelf.ids.prefix(4) {
-            guard let item = captures[id] else { continue }
-            let row = makeRow(item)
-            rows.addArrangedSubview(row)
+        let position = UserDefaults.standard.string(forKey: "shelfPosition") ?? "bottomLeft"
+        let right = position.contains("Right")
+        let bottom = !position.hasPrefix("top")
+        var views: [NSView] = shelf.ids.prefix(4).compactMap { id in captures[id].map(makeCard) }
+        if shelf.ids.count > 1 { views.append(makeFooter()) }
+        // newest card sits closest to the screen corner
+        if bottom { views.reverse() }
+        let width = Self.cardSize.width + Self.inset * 2
+        let height = views.reduce(Self.inset * 2 - Self.gap) { $0 + $1.frame.height + Self.gap }
+        let container = NSView(frame: NSRect(x: 0, y: 0, width: width, height: height))
+        var y = height - Self.inset
+        for view in views {
+            y -= view.frame.height
+            let x = right ? width - Self.inset - view.frame.width : Self.inset
+            view.setFrameOrigin(NSPoint(x: x, y: y))
+            container.addSubview(view)
+            y -= Self.gap
         }
-        if shelf.ids.count > 1 {
-            let actions = NSStackView()
-            actions.spacing = 12
-            let history = ActionButton(title: shelf.ids.count > 4 ? "View all \(shelf.ids.count)" : "History", symbol: "clock") { [weak self] in self?.onHistory?() }
-            let close = ActionButton(title: "Dismiss all", symbol: "xmark") { [weak self] in self?.dismissAll() }
-            actions.addArrangedSubview(history)
-            actions.addArrangedSubview(close)
-            rows.addArrangedSubview(actions)
-        }
-        let background = NSVisualEffectView()
-        background.material = .hudWindow
-        background.blendingMode = .behindWindow
-        background.state = .active
-        background.wantsLayer = true
-        background.layer?.cornerRadius = 14
-        background.layer?.masksToBounds = true
-        rows.translatesAutoresizingMaskIntoConstraints = false
-        background.addSubview(rows)
-        NSLayoutConstraint.activate([
-            rows.leadingAnchor.constraint(equalTo: background.leadingAnchor),
-            rows.trailingAnchor.constraint(equalTo: background.trailingAnchor),
-            rows.topAnchor.constraint(equalTo: background.topAnchor),
-            rows.bottomAnchor.constraint(equalTo: background.bottomAnchor)
-        ])
-        contentView = background
-        let height = CGFloat(min(shelf.ids.count, 4)) * 114 + 20 + (shelf.ids.count > 1 ? 32 : 0)
-        let width: CGFloat = 330
+        contentView = container
         let screen = (isVisible ? self.screen : nil) ?? NSScreen.screens.first(where: { $0.frame.contains(NSEvent.mouseLocation) }) ?? NSScreen.main ?? NSScreen.screens.first
         let visible = screen?.visibleFrame ?? CGRect(x: 0, y: 0, width: 1024, height: 768)
-        let position = UserDefaults.standard.string(forKey: "shelfPosition") ?? "bottomLeft"
-        let x = position.contains("Right") ? visible.maxX - width - 16 : visible.minX + 16
-        let y = position.hasPrefix("top") ? visible.maxY - height - 16 : visible.minY + 16
-        setFrame(CGRect(x: x, y: y, width: width, height: min(height, visible.height - 32)), display: true)
+        let x = right ? visible.maxX - width - 2 : visible.minX + 2
+        let originY = bottom ? visible.minY + 2 : visible.maxY - min(height, visible.height) - 2
+        setFrame(CGRect(x: x, y: originY, width: width, height: min(height, visible.height)), display: true)
     }
 
-    private func makeRow(_ item: CaptureItem) -> NSView {
-        let row = NSStackView()
-        row.orientation = .vertical
-        row.spacing = 6
-        row.alignment = .leading
-        row.translatesAutoresizingMaskIntoConstraints = false
-        row.widthAnchor.constraint(equalToConstant: 310).isActive = true
-        let heading = NSStackView()
-        heading.spacing = 8
-        let thumbnail = CaptureDragView(url: item.shareURL(in: library.root))
-        thumbnail.image = NSImage(contentsOf: item.thumbnail(in: library.root)) ?? NSImage(systemSymbolName: item.kind.isVideo ? "video" : "photo", accessibilityDescription: nil)
-        thumbnail.imageScaling = .scaleProportionallyUpOrDown
-        thumbnail.wantsLayer = true
-        thumbnail.layer?.cornerRadius = 6
-        thumbnail.layer?.masksToBounds = true
-        thumbnail.setAccessibilityLabel(item.kind == .videoProject ? "\(item.title), click to edit and export" : "\(item.title), drag to share or click to edit")
-        thumbnail.translatesAutoresizingMaskIntoConstraints = false
-        NSLayoutConstraint.activate([thumbnail.widthAnchor.constraint(equalToConstant: 118), thumbnail.heightAnchor.constraint(equalToConstant: 72)])
-        thumbnail.onOpen = { [weak self] in self?.interact { self?.onEdit?(item) } }
-        thumbnail.onDrag = { [weak self] dragging in
+    private func show() {
+        guard !isVisible else { orderFrontRegardless(); return }
+        let target = frame
+        let edge: CGFloat = (UserDefaults.standard.string(forKey: "shelfPosition") ?? "bottomLeft").contains("Right") ? 1 : -1
+        if !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion { setFrame(target.offsetBy(dx: edge * 28, dy: 0), display: false) }
+        alphaValue = 0
+        orderFrontRegardless()
+        NSAnimationContext.runAnimationGroup { context in
+            context.duration = 0.22
+            context.timingFunction = CAMediaTimingFunction(name: .easeOut)
+            animator().setFrame(target, display: true)
+            animator().alphaValue = 1
+        }
+    }
+
+    private func makeCard(_ item: CaptureItem) -> NSView {
+        let card = QuickAccessCard(size: Self.cardSize, url: item.shareURL(in: library.root))
+        if let thumbnail = NSImage(contentsOf: item.thumbnail(in: library.root)) {
+            card.thumbnail.image = thumbnail
+        } else {
+            card.thumbnail.image = NSImage(systemSymbolName: item.kind.isVideo ? "video" : "photo", accessibilityDescription: nil)
+            card.thumbnail.layer?.contentsGravity = .center
+        }
+        card.thumbnail.setAccessibilityLabel(item.kind == .videoProject ? "\(item.title), click to edit and export" : "\(item.title), drag to share or click to edit")
+        card.thumbnail.onOpen = { [weak self] in self?.interact { self?.onEdit?(item) } }
+        card.thumbnail.onDrag = { [weak self] dragging in
             self?.isDraggingCapture = dragging
             self?.lastInteraction = Date()
         }
-        let title = NSTextField(wrappingLabelWithString: item.title)
-        title.font = .systemFont(ofSize: 11, weight: .medium)
-        title.maximumNumberOfLines = 3
-        title.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
-        let dismiss = ActionButton(title: "", symbol: "xmark", help: "Dismiss") { [weak self] in self?.dismiss(item) }
-        heading.addArrangedSubview(thumbnail)
-        heading.addArrangedSubview(title)
-        heading.addArrangedSubview(dismiss)
-        heading.widthAnchor.constraint(equalToConstant: 310).isActive = true
-        row.addArrangedSubview(heading)
-
-        let actions = NSStackView()
-        actions.spacing = 14
+        var center: [HUDButton] = []
         if item.kind != .videoProject {
-            actions.addArrangedSubview(ActionButton(title: "Copy", symbol: "doc.on.doc") { [weak self] in self?.interact { self?.onCopy?(item) } })
+            center.append(HUDButton(title: "Copy") { [weak self] in self?.interact { self?.onCopy?(item) } })
         }
-        actions.addArrangedSubview(ActionButton(title: "Edit", symbol: "pencil") { [weak self] in self?.interact { self?.onEdit?(item) } })
-        actions.addArrangedSubview(ActionButton(title: item.kind == .videoProject ? "Export" : "Save", symbol: "square.and.arrow.down") { [weak self] in self?.interact { self?.onSave?(item) } })
+        center.append(HUDButton(title: item.kind == .videoProject ? "Export" : "Save") { [weak self] in self?.interact { self?.onSave?(item) } })
+        card.setCenter(center)
+        card.setCorner(.topLeft, HUDButton(symbol: "xmark", help: "Dismiss") { [weak self] in self?.dismiss(item) })
+        card.setCorner(.topRight, HUDButton(symbol: "pencil", help: "Edit") { [weak self] in self?.interact { self?.onEdit?(item) } })
         if !item.kind.isVideo {
-            actions.addArrangedSubview(ActionButton(title: "Pin", symbol: "pin") { [weak self] in self?.interact { self?.onPin?(item) } })
+            card.setCorner(.bottomLeft, HUDButton(symbol: "pin.fill", help: "Pin") { [weak self] in self?.interact { self?.onPin?(item) } })
         }
-        row.addArrangedSubview(actions)
-        row.heightAnchor.constraint(equalToConstant: 106).isActive = true
+        return card
+    }
+
+    private func makeFooter() -> NSView {
+        let count = shelf.ids.count
+        let row = NSStackView(views: [
+            HUDButton(title: count > 4 ? "Show All \(count)" : "History", compact: true) { [weak self] in self?.onHistory?() },
+            HUDButton(title: "Close All", compact: true) { [weak self] in self?.dismissAll() }
+        ])
+        row.spacing = 6
+        row.setFrameSize(row.fittingSize)
         return row
     }
 
@@ -273,44 +264,154 @@ final class QuickAccessPanel: NSPanel {
 }
 
 @MainActor
-final class ActionButton: NSButton {
-    private var actionHandler: () -> Void
+final class QuickAccessCard: NSView {
+    enum Corner { case topLeft, topRight, bottomLeft, bottomRight }
+    let thumbnail: CaptureDragView
+    private let overlay = PassthroughView()
+    private static let radius: CGFloat = 12
 
-    init(title: String, symbol: String, help: String? = nil, action: @escaping () -> Void) {
-        actionHandler = action
-        super.init(frame: .zero)
-        self.title = title
-        image = NSImage(systemSymbolName: symbol, accessibilityDescription: nil)
-        imagePosition = title.isEmpty ? .imageOnly : .imageLeading
-        bezelStyle = .inline
-        isBordered = false
-        font = .systemFont(ofSize: 12, weight: .medium)
-        contentTintColor = .labelColor
-        target = self
-        self.action = #selector(invoke)
-        toolTip = help ?? title
-        setAccessibilityLabel(help ?? title)
-        translatesAutoresizingMaskIntoConstraints = false
-        heightAnchor.constraint(greaterThanOrEqualToConstant: 28).isActive = true
-        if title.isEmpty { widthAnchor.constraint(greaterThanOrEqualToConstant: 28).isActive = true }
+    init(size: CGSize, url: URL?) {
+        thumbnail = CaptureDragView(url: url)
+        super.init(frame: NSRect(origin: .zero, size: size))
+        wantsLayer = true
+        layer?.shadowColor = NSColor.black.cgColor
+        layer?.shadowOpacity = 0.28
+        layer?.shadowRadius = 9
+        layer?.shadowOffset = CGSize(width: 0, height: -3)
+        layer?.shadowPath = CGPath(roundedRect: bounds, cornerWidth: Self.radius, cornerHeight: Self.radius, transform: nil)
+        let clip = NSView(frame: bounds)
+        clip.wantsLayer = true
+        clip.layer?.cornerRadius = Self.radius
+        clip.layer?.cornerCurve = .continuous
+        clip.layer?.masksToBounds = true
+        clip.layer?.borderWidth = 0.5
+        clip.layer?.borderColor = NSColor.black.withAlphaComponent(0.22).cgColor
+        thumbnail.frame = bounds
+        overlay.frame = bounds
+        overlay.wantsLayer = true
+        overlay.layer?.backgroundColor = NSColor.black.withAlphaComponent(0.32).cgColor
+        overlay.alphaValue = 0
+        clip.addSubview(thumbnail)
+        clip.addSubview(overlay)
+        addSubview(clip)
+        addTrackingArea(NSTrackingArea(rect: .zero, options: [.mouseEnteredAndExited, .activeAlways, .inVisibleRect], owner: self))
     }
 
     required init?(coder: NSCoder) { nil }
-    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
-    @objc private func invoke() { actionHandler() }
+
+    func setCenter(_ buttons: [HUDButton]) {
+        let width = max(76, buttons.map(\.frame.width).max() ?? 0)
+        for button in buttons { button.setFrameSize(NSSize(width: width, height: button.frame.height)) }
+        let stack = NSStackView(views: buttons)
+        stack.orientation = .vertical
+        stack.spacing = 6
+        stack.setFrameSize(stack.fittingSize)
+        stack.setFrameOrigin(NSPoint(x: (bounds.width - stack.frame.width) / 2, y: (bounds.height - stack.frame.height) / 2))
+        overlay.addSubview(stack)
+    }
+
+    func setCorner(_ corner: Corner, _ button: HUDButton) {
+        let inset: CGFloat = 7
+        let size = button.frame.size
+        let x = corner == .topLeft || corner == .bottomLeft ? inset : bounds.width - size.width - inset
+        let y = corner == .bottomLeft || corner == .bottomRight ? inset : bounds.height - size.height - inset
+        button.setFrameOrigin(NSPoint(x: x, y: y))
+        overlay.addSubview(button)
+    }
+
+    // a card rebuilt under a resting pointer gets no mouseEntered
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        guard let window else { return }
+        if bounds.contains(convert(window.mouseLocationOutsideOfEventStream, from: nil)) { overlay.alphaValue = 1 }
+    }
+
+    override func mouseEntered(with event: NSEvent) { setHovered(true) }
+    override func mouseExited(with event: NSEvent) { setHovered(false) }
+
+    func setHovered(_ hovered: Bool) {
+        NSAnimationContext.runAnimationGroup { context in
+            context.duration = hovered ? 0.12 : 0.18
+            overlay.animator().alphaValue = hovered ? 1 : 0
+        }
+    }
+}
+
+// lets drags and clicks reach the thumbnail everywhere except on buttons
+final class PassthroughView: NSView {
+    override func hitTest(_ point: NSPoint) -> NSView? {
+        let hit = super.hitTest(point)
+        return hit === self ? nil : hit
+    }
 }
 
 @MainActor
-final class CaptureDragView: NSImageView, NSDraggingSource {
+final class HUDButton: NSButton {
+    private let handler: () -> Void
+    private var hovered = false { didSet { updateFill() } }
+
+    init(title: String = "", symbol: String? = nil, help: String? = nil, compact: Bool = false, action: @escaping () -> Void) {
+        handler = action
+        super.init(frame: .zero)
+        let label = help ?? title
+        isBordered = false
+        focusRingType = .none
+        wantsLayer = true
+        target = self
+        self.action = #selector(invoke)
+        toolTip = label
+        setAccessibilityLabel(label)
+        if let symbol {
+            image = NSImage(systemSymbolName: symbol, accessibilityDescription: label)?
+                .withSymbolConfiguration(.init(pointSize: 10, weight: .bold))
+            imagePosition = .imageOnly
+            contentTintColor = .white
+            setFrameSize(NSSize(width: 24, height: 24))
+        } else {
+            let font = NSFont.systemFont(ofSize: compact ? 11 : 12, weight: .semibold)
+            attributedTitle = NSAttributedString(string: title, attributes: [.font: font, .foregroundColor: NSColor.white])
+            setFrameSize(NSSize(width: ceil(attributedTitle.size().width) + (compact ? 20 : 30), height: compact ? 22 : 26))
+        }
+        layer?.cornerRadius = frame.height / 2
+        layer?.cornerCurve = .continuous
+        updateFill()
+        addTrackingArea(NSTrackingArea(rect: .zero, options: [.mouseEnteredAndExited, .activeAlways, .inVisibleRect], owner: self))
+    }
+
+    required init?(coder: NSCoder) { nil }
+    override var intrinsicContentSize: NSSize { frame.size }
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+    override func mouseEntered(with event: NSEvent) { hovered = true }
+    override func mouseExited(with event: NSEvent) { hovered = false }
+    @objc private func invoke() { handler() }
+
+    private func updateFill() {
+        layer?.backgroundColor = NSColor.black.withAlphaComponent(hovered ? 0.8 : 0.58).cgColor
+    }
+}
+
+@MainActor
+final class CaptureDragView: NSView, NSDraggingSource {
     let url: URL?
+    var image: NSImage? { didSet { layer?.contents = image } }
     var onOpen: (() -> Void)?
     var onDrag: ((Bool) -> Void)?
     private var downEvent: NSEvent?
     private var startedDragging = false
 
-    init(url: URL?) { self.url = url; super.init(frame: .zero) }
+    init(url: URL?) {
+        self.url = url
+        super.init(frame: .zero)
+        wantsLayer = true
+        layer?.contentsGravity = .resizeAspectFill
+        layer?.backgroundColor = NSColor.windowBackgroundColor.cgColor
+        setAccessibilityElement(true)
+        setAccessibilityRole(.button)
+    }
+
     required init?(coder: NSCoder) { nil }
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+    override func accessibilityPerformPress() -> Bool { onOpen?(); return true }
     override func mouseDown(with event: NSEvent) { downEvent = event; startedDragging = false }
 
     override func mouseDragged(with event: NSEvent) {
