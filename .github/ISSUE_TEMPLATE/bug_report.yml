@@ -1,0 +1,32 @@
+name: Bug report
+description: Report a reproducible problem
+body:
+  - type: input
+    id: version
+    attributes:
+      label: Clipt and macOS versions
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Steps to reproduce
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior
+    validations:
+      required: true
+  - type: textarea
+    id: context
+    attributes:
+      label: Relevant details
+      description: Include display scaling, capture mode, or sanitized media when useful. Do not include private captures or credentials.
