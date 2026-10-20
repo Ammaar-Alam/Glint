@@ -211,7 +211,7 @@ final class QuickAccessPanel: NSPanel {
         }
         var center: [HUDButton] = []
         if item.kind != .videoProject {
-            center.append(HUDButton(title: "Copy") { [weak self] in self?.interact { self?.onCopy?(item) } })
+            center.append(HUDButton(title: "Copy", style: .primary) { [weak self] in self?.interact { self?.onCopy?(item) } })
         }
         center.append(HUDButton(title: item.kind == .videoProject ? "Export" : "Save") { [weak self] in self?.interact { self?.onSave?(item) } })
         card.setCenter(center)
@@ -297,7 +297,7 @@ final class QuickAccessCard: NSView {
         thumbnail.frame = bounds
         overlay.frame = bounds
         overlay.wantsLayer = true
-        overlay.layer?.backgroundColor = NSColor.black.withAlphaComponent(0.32).cgColor
+        overlay.layer?.backgroundColor = NSColor.black.withAlphaComponent(0.4).cgColor
         overlay.alphaValue = 0
         clip.addSubview(thumbnail)
         clip.addSubview(overlay)
@@ -308,18 +308,18 @@ final class QuickAccessCard: NSView {
     required init?(coder: NSCoder) { nil }
 
     func setCenter(_ buttons: [HUDButton]) {
-        let width = max(76, buttons.map(\.frame.width).max() ?? 0)
+        let width = max(88, buttons.map(\.frame.width).max() ?? 0)
         for button in buttons { button.setFrameSize(NSSize(width: width, height: button.frame.height)) }
         let stack = NSStackView(views: buttons)
         stack.orientation = .vertical
-        stack.spacing = 6
+        stack.spacing = 8
         stack.setFrameSize(stack.fittingSize)
         stack.setFrameOrigin(NSPoint(x: (bounds.width - stack.frame.width) / 2, y: (bounds.height - stack.frame.height) / 2))
         overlay.addSubview(stack)
     }
 
     func setCorner(_ corner: Corner, _ button: HUDButton) {
-        let inset: CGFloat = 7
+        let inset: CGFloat = 8
         let size = button.frame.size
         let x = corner == .topLeft || corner == .bottomLeft ? inset : bounds.width - size.width - inset
         let y = corner == .bottomLeft || corner == .bottomRight ? inset : bounds.height - size.height - inset
@@ -355,14 +355,19 @@ final class PassthroughView: NSView {
 
 @MainActor
 final class HUDButton: NSButton {
-    static let compactHeight: CGFloat = 22
+    enum Style { case primary, light }
+    static let compactHeight: CGFloat = 24
     private let handler: () -> Void
+    private let style: Style
     private var hovered = false { didSet { updateFill() } }
 
-    init(title: String = "", symbol: String? = nil, help: String? = nil, compact: Bool = false, action: @escaping () -> Void) {
+    // solid fills so buttons read over any capture, dark or light
+    init(title: String = "", symbol: String? = nil, help: String? = nil, style: Style = .light, compact: Bool = false, action: @escaping () -> Void) {
         handler = action
+        self.style = style
         super.init(frame: .zero)
         let label = help ?? title
+        let ink = style == .primary ? Self.resolved(.onGlint) : NSColor(white: 0.1, alpha: 1)
         isBordered = false
         focusRingType = .none
         wantsLayer = true
@@ -372,17 +377,23 @@ final class HUDButton: NSButton {
         setAccessibilityLabel(label)
         if let symbol {
             image = NSImage(systemSymbolName: symbol, accessibilityDescription: label)?
-                .withSymbolConfiguration(.init(pointSize: 10, weight: .bold))
+                .withSymbolConfiguration(.init(pointSize: 12, weight: .semibold))
             imagePosition = .imageOnly
-            contentTintColor = .white
-            setFrameSize(NSSize(width: 24, height: 24))
+            contentTintColor = ink
+            setFrameSize(NSSize(width: 28, height: 28))
         } else {
-            let font = NSFont.systemFont(ofSize: compact ? 11 : 12, weight: .semibold)
-            attributedTitle = NSAttributedString(string: title, attributes: [.font: font, .foregroundColor: NSColor.white])
-            setFrameSize(NSSize(width: ceil(attributedTitle.size().width) + (compact ? 20 : 30), height: compact ? Self.compactHeight : 26))
+            let font = NSFont.systemFont(ofSize: compact ? 12 : 13, weight: .semibold)
+            attributedTitle = NSAttributedString(string: title, attributes: [.font: font, .foregroundColor: ink])
+            setFrameSize(NSSize(width: ceil(attributedTitle.size().width) + (compact ? 22 : 32), height: compact ? Self.compactHeight : 30))
         }
         layer?.cornerRadius = frame.height / 2
         layer?.cornerCurve = .continuous
+        layer?.borderWidth = 0.5
+        layer?.borderColor = NSColor.black.withAlphaComponent(0.15).cgColor
+        layer?.shadowColor = NSColor.black.cgColor
+        layer?.shadowOpacity = 0.25
+        layer?.shadowRadius = 3
+        layer?.shadowOffset = CGSize(width: 0, height: -1)
         updateFill()
         addTrackingArea(NSTrackingArea(rect: .zero, options: [.mouseEnteredAndExited, .activeAlways, .inVisibleRect], owner: self))
     }
@@ -394,8 +405,16 @@ final class HUDButton: NSButton {
     override func mouseExited(with event: NSEvent) { hovered = false }
     @objc private func invoke() { handler() }
 
+    // the popup floats over a dimmed capture, so the bright accent always applies
+    private static func resolved(_ color: NSColor) -> NSColor {
+        var result = color
+        NSAppearance(named: .darkAqua)?.performAsCurrentDrawingAppearance { result = color.usingColorSpace(.sRGB) ?? color }
+        return result
+    }
+
     private func updateFill() {
-        layer?.backgroundColor = NSColor.black.withAlphaComponent(hovered ? 0.8 : 0.58).cgColor
+        let fill = style == .primary ? Self.resolved(.glint) : NSColor(white: 0.97, alpha: 1)
+        layer?.backgroundColor = (hovered ? fill.blended(withFraction: 0.18, of: .white) ?? fill : fill.withAlphaComponent(0.94)).cgColor
     }
 }
 
