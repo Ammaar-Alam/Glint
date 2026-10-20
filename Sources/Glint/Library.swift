@@ -9,14 +9,14 @@ enum CaptureKind: String, Codable, Sendable {
 
     static func identify(_ url: URL) throws -> CaptureKind {
         switch url.pathExtension.lowercased() {
-        case "clipt": return .imageProject
-        case "cliptvideo": return .videoProject
+        case "glint": return .imageProject
+        case "glintvideo": return .videoProject
         default:
             if let type = UTType(filenameExtension: url.pathExtension) {
                 if type.conforms(to: .image) { return .image }
                 if type.conforms(to: .movie) { return .video }
             }
-            throw CliptError.message("Choose an image, a video, or a Clipt project.")
+            throw GlintError.message("Choose an image, a video, or a Glint project.")
         }
     }
 
@@ -47,7 +47,7 @@ struct CaptureItem: Codable, Identifiable, Equatable, Sendable {
 }
 
 actor CaptureStorage {
-    static let defaultRoot = URL.applicationSupportDirectory.appendingPathComponent("Clipt/Captures", isDirectory: true)
+    static let defaultRoot = URL.applicationSupportDirectory.appendingPathComponent("Glint/Captures", isDirectory: true)
     let root: URL
 
     init(root: URL = defaultRoot) { self.root = root }
@@ -67,7 +67,7 @@ actor CaptureStorage {
     }
 
     func ingest(_ source: URL, title: String) async throws -> CaptureItem {
-        guard source.isFileURL else { throw CliptError.message("Only local files can be opened.") }
+        guard source.isFileURL else { throw GlintError.message("Only local files can be opened.") }
         let kind = try CaptureKind.identify(source)
         let item = CaptureItem(id: UUID(), createdAt: Date(), title: title,
                                filename: "capture." + source.pathExtension.lowercased(), kind: kind)
@@ -91,7 +91,7 @@ actor CaptureStorage {
     func rename(_ item: CaptureItem, to title: String) throws -> CaptureItem {
         var updated = item
         updated.title = title.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !updated.title.isEmpty else { throw CliptError.message("Enter a name for this capture.") }
+        guard !updated.title.isEmpty else { throw GlintError.message("Enter a name for this capture.") }
         try JSONEncoder().encode(updated).write(to: item.directory(in: root).appendingPathComponent("item.json"), options: .atomic)
         return updated
     }
@@ -120,7 +120,7 @@ actor CaptureStorage {
                     kCGImageSourceThumbnailMaxPixelSize: 600,
                     kCGImageSourceCreateThumbnailWithTransform: true
                   ] as CFDictionary) else {
-                throw CliptError.message("The image couldn’t be read.")
+                throw GlintError.message("The image couldn’t be read.")
             }
             return thumbnail
         }
@@ -200,10 +200,10 @@ enum CaptureNaming {
         let day = formatter.string(from: date)
         formatter.dateFormat = "HH.mm.ss"
         let time = formatter.string(from: date)
-        let pattern = template ?? UserDefaults.standard.string(forKey: "filenameTemplate") ?? "Clipt {date} at {time}"
+        let pattern = template ?? UserDefaults.standard.string(forKey: "filenameTemplate") ?? "Glint {date} at {time}"
         let name = pattern.replacingOccurrences(of: "{date}", with: day).replacingOccurrences(of: "{time}", with: time)
         let safe = name.components(separatedBy: CharacterSet(charactersIn: "/\\:\0")).joined(separator: "-")
             .trimmingCharacters(in: .whitespacesAndNewlines)
-        return safe.isEmpty || safe == "." || safe == ".." ? "Clipt \(day) at \(time)" : String(safe.prefix(160))
+        return safe.isEmpty || safe == "." || safe == ".." ? "Glint \(day) at \(time)" : String(safe.prefix(160))
     }
 }

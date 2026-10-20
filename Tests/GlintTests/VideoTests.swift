@@ -5,14 +5,14 @@ import AVKit
 import CoreImage
 import ImageIO
 import SwiftUI
-@testable import Clipt
+@testable import Glint
 
 final class VideoTests: XCTestCase {
     @MainActor
     func testVideoEditorCreatesNativePlaybackViewOffscreen() async throws {
         let root = try Self.directory()
         defer { try? FileManager.default.removeItem(at: root) }
-        let package = root.appendingPathComponent("recording.cliptvideo", isDirectory: true)
+        let package = root.appendingPathComponent("recording.glintvideo", isDirectory: true)
         try FileManager.default.createDirectory(at: package, withIntermediateDirectories: false)
         try await Self.movie(at: package.appendingPathComponent("screen.mov"))
         var project = VideoProject(duration: 1, width: 96, height: 64, frameRate: 10)
@@ -153,7 +153,7 @@ final class VideoTests: XCTestCase {
     func testProjectLoadDoesNotDependOnDirectoryURLHint() throws {
         let root = try Self.directory()
         defer { try? FileManager.default.removeItem(at: root) }
-        let directory = root.appendingPathComponent("capture.cliptvideo", isDirectory: true)
+        let directory = root.appendingPathComponent("capture.glintvideo", isDirectory: true)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: false)
         try Data().write(to: directory.appendingPathComponent("screen.mov"))
         let project = VideoProject(duration: 1, width: 64, height: 64)
@@ -162,7 +162,7 @@ final class VideoTests: XCTestCase {
             let url = URL(fileURLWithPath: directory.path, isDirectory: hint)
             XCTAssertEqual(try VideoProject.load(from: url), project, "directory hint: \(hint)")
         }
-        let alias = root.appendingPathComponent("alias.cliptvideo", isDirectory: false)
+        let alias = root.appendingPathComponent("alias.glintvideo", isDirectory: false)
         try FileManager.default.createSymbolicLink(at: alias, withDestinationURL: directory)
         XCTAssertEqual(try VideoProject.load(from: alias), project)
     }
@@ -172,7 +172,7 @@ final class VideoTests: XCTestCase {
         defer { try? FileManager.default.removeItem(at: root) }
         let outside = root.appendingPathComponent("outside.mov")
         try Data().write(to: outside)
-        let directory = root.appendingPathComponent("capture.cliptvideo", isDirectory: true)
+        let directory = root.appendingPathComponent("capture.glintvideo", isDirectory: true)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: false)
         try FileManager.default.createSymbolicLink(at: directory.appendingPathComponent("screen.mov"), withDestinationURL: outside)
         try VideoProject(duration: 1, width: 64, height: 64).save(to: directory)
@@ -278,7 +278,7 @@ final class VideoTests: XCTestCase {
     func testUndoingBackgroundDoesNotSaveItsAssetIntoTheOriginalProject() async throws {
         let directory = try Self.directory()
         defer { try? FileManager.default.removeItem(at: directory) }
-        let package = directory.appendingPathComponent("recording.cliptvideo", isDirectory: true)
+        let package = directory.appendingPathComponent("recording.glintvideo", isDirectory: true)
         try FileManager.default.createDirectory(at: package, withIntermediateDirectories: false)
         try await Self.movie(at: package.appendingPathComponent("screen.mov"))
         var project = VideoProject(duration: 1, width: 96, height: 64, frameRate: 10)
@@ -306,7 +306,7 @@ final class VideoTests: XCTestCase {
     }
 
     static func directory() throws -> URL {
-        let url = FileManager.default.temporaryDirectory.appendingPathComponent("Clipt-video-test-\(UUID().uuidString)", isDirectory: true)
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("Glint-video-test-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
         return url
     }
@@ -322,23 +322,23 @@ final class VideoTests: XCTestCase {
         let input = AVAssetWriterInput(mediaType: .video, outputSettings: [AVVideoCodecKey: AVVideoCodecType.h264, AVVideoWidthKey: 96, AVVideoHeightKey: 64])
         let adaptor = AVAssetWriterInputPixelBufferAdaptor(assetWriterInput: input, sourcePixelBufferAttributes: [kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA, kCVPixelBufferWidthKey as String: 96, kCVPixelBufferHeightKey as String: 64])
         writer.add(input)
-        guard writer.startWriting() else { throw writer.error ?? CliptError.message("The test video couldn’t start.") }
+        guard writer.startWriting() else { throw writer.error ?? GlintError.message("The test video couldn’t start.") }
         writer.startSession(atSourceTime: .zero)
         let context = CIContext()
         for frame in 0..<10 {
             while !input.isReadyForMoreMediaData {
-                guard writer.status == .writing else { throw writer.error ?? CliptError.message("The test video stopped encoding.") }
+                guard writer.status == .writing else { throw writer.error ?? GlintError.message("The test video stopped encoding.") }
                 try await Task.sleep(for: .milliseconds(2))
             }
             var pixelBuffer: CVPixelBuffer?
-            guard let pool = adaptor.pixelBufferPool, CVPixelBufferPoolCreatePixelBuffer(nil, pool, &pixelBuffer) == kCVReturnSuccess, let pixelBuffer else { throw CliptError.message("The test video buffer couldn’t be created.") }
+            guard let pool = adaptor.pixelBufferPool, CVPixelBufferPoolCreatePixelBuffer(nil, pool, &pixelBuffer) == kCVReturnSuccess, let pixelBuffer else { throw GlintError.message("The test video buffer couldn’t be created.") }
             let image = CIImage(color: CIColor(red: 1, green: Double(frame) / 20, blue: 0)).cropped(to: CGRect(x: 0, y: 0, width: 96, height: 64))
             context.render(image, to: pixelBuffer)
-            guard adaptor.append(pixelBuffer, withPresentationTime: CMTime(value: Int64(frame), timescale: 10)) else { throw writer.error ?? CliptError.message("The test video frame couldn’t be written.") }
+            guard adaptor.append(pixelBuffer, withPresentationTime: CMTime(value: Int64(frame), timescale: 10)) else { throw writer.error ?? GlintError.message("The test video frame couldn’t be written.") }
         }
         writer.endSession(atSourceTime: CMTime(seconds: 1, preferredTimescale: 600))
         input.markAsFinished()
         await writer.finishWriting()
-        guard writer.status == .completed else { throw writer.error ?? CliptError.message("The test video couldn’t be finished.") }
+        guard writer.status == .completed else { throw writer.error ?? GlintError.message("The test video couldn’t be finished.") }
     }
 }

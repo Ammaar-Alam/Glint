@@ -2,12 +2,12 @@
 import PackageDescription
 
 let package = Package(
-    name: "Clipt",
+    name: "Glint",
     platforms: [.macOS(.v15)],
-    products: [.executable(name: "Clipt", targets: ["Clipt"])],
+    products: [.executable(name: "Glint", targets: ["Glint"])],
     targets: [
-        .executableTarget(name: "Clipt"),
-        .testTarget(name: "CliptTests", dependencies: ["Clipt"])
+        .executableTarget(name: "Glint"),
+        .testTarget(name: "GlintTests", dependencies: ["Glint"])
     ],
     swiftLanguageModes: [.v5]
 )

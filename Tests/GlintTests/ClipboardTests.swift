@@ -1,6 +1,6 @@
 import AppKit
 import XCTest
-@testable import Clipt
+@testable import Glint
 
 final class ClipboardTests: XCTestCase {
     @MainActor

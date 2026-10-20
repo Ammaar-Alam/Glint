@@ -34,11 +34,11 @@ final class CaptureService {
     private let regionDefaultsKey = "lastCaptureRegion"
 
     func capture(_ mode: CaptureMode, delay: TimeInterval = 0) async throws -> CaptureResult? {
-        guard !isCapturing else { throw CliptError.message("A capture is already in progress.") }
+        guard !isCapturing else { throw GlintError.message("A capture is already in progress.") }
         isCapturing = true
         defer { isCapturing = false }
         guard CGPreflightScreenCaptureAccess() || CGRequestScreenCaptureAccess() else {
-            throw CliptError.message("Allow Clipt in System Settings → Privacy & Security → Screen & System Audio Recording, then try again.")
+            throw GlintError.message("Allow Glint in System Settings → Privacy & Security → Screen & System Audio Recording, then try again.")
         }
         let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true)
         let cursor = includeCursor
@@ -65,16 +65,16 @@ final class CaptureService {
         } else if mode == .fullScreen {
             let point = CaptureGeometry.quartzPoint(fromCocoa: NSEvent.mouseLocation, primaryHeight: CGDisplayBounds(CGMainDisplayID()).height)
             guard let display = content.displays.first(where: { $0.frame.contains(point) }) ?? content.displays.first else {
-                throw CliptError.message("No screen is available to capture.")
+                throw GlintError.message("No screen is available to capture.")
             }
             selected = .region(display.frame, .fullScreen)
         } else {
             guard let saved = UserDefaults.standard.string(forKey: regionDefaultsKey) else {
-                throw CliptError.message("Capture an area first to reuse its selection.")
+                throw GlintError.message("Capture an area first to reuse its selection.")
             }
             let rect = NSRectFromString(saved)
             guard !rect.isEmpty, content.displays.contains(where: { $0.frame.intersects(rect) }) else {
-                throw CliptError.message("The previous area is no longer on a connected screen.")
+                throw GlintError.message("The previous area is no longer on a connected screen.")
             }
             selected = .region(rect, .previousArea)
         }
@@ -105,7 +105,7 @@ final class CaptureService {
         if effectiveMode == .text {
             do {
                 let text = try await OCRService.recognize(url: url)
-                guard !text.isEmpty else { throw CliptError.message("No text or QR code was found in this area.") }
+                guard !text.isEmpty else { throw GlintError.message("No text or QR code was found in this area.") }
                 return CaptureResult(url: url, recognizedText: text)
             } catch { try? FileManager.default.removeItem(at: url); throw error }
         }
@@ -126,7 +126,7 @@ enum CaptureFrame {
             ? content : try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true)
         let parts = content.displays.filter { $0.frame.intersects(rect) }
         guard !parts.isEmpty, rect.width.isFinite, rect.height.isFinite, rect.width > 0, rect.height > 0 else {
-            throw CliptError.message("The selected area is outside the connected screens.")
+            throw GlintError.message("The selected area is outside the connected screens.")
         }
         var frames: [(CGRect, CGImage)] = []
         var outputScale: CGFloat = 1
@@ -163,7 +163,7 @@ enum CaptureFrame {
             outputScale = max(outputScale, scaleX)
             cropped.append((intersection, image))
         }
-        guard !cropped.isEmpty else { throw CliptError.message("The selected area is outside the frozen screens.") }
+        guard !cropped.isEmpty else { throw GlintError.message("The selected area is outside the frozen screens.") }
         return try await composite(cropped, in: rect, scale: outputScale)
     }
 
@@ -177,14 +177,14 @@ enum CaptureFrame {
                   Double(width) * Double(height) <= 80_000_000,
                   let context = CGContext(data: nil, width: width, height: height, bitsPerComponent: 8, bytesPerRow: 0,
                                           space: CGColorSpace(name: CGColorSpace.sRGB)!, bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else {
-                throw CliptError.message("The selected area is too large to capture.")
+                throw GlintError.message("The selected area is too large to capture.")
             }
             for (frame, image) in images {
                 let target = CGRect(x: (frame.minX - rect.minX) * scale, y: (rect.maxY - frame.maxY) * scale,
                                     width: frame.width * scale, height: frame.height * scale)
                 context.draw(image, in: target)
             }
-            guard let image = context.makeImage() else { throw CliptError.message("The screens couldn’t be combined.") }
+            guard let image = context.makeImage() else { throw GlintError.message("The screens couldn’t be combined.") }
             return image
         }.value
     }
@@ -206,11 +206,11 @@ enum CaptureFrame {
             guard let context = CGContext(data: nil, width: image.width + padding * 2, height: image.height + padding * 2,
                                           bitsPerComponent: 8, bytesPerRow: 0, space: CGColorSpace(name: CGColorSpace.sRGB)!,
                                           bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else {
-                throw CliptError.message("The window shadow couldn’t be rendered.")
+                throw GlintError.message("The window shadow couldn’t be rendered.")
             }
             context.setShadow(offset: CGSize(width: 0, height: -4 * scale), blur: 12 * scale, color: CGColor(gray: 0, alpha: 0.35))
             context.draw(image, in: CGRect(x: padding, y: padding, width: image.width, height: image.height))
-            guard let result = context.makeImage() else { throw CliptError.message("The window couldn’t be rendered.") }
+            guard let result = context.makeImage() else { throw GlintError.message("The window couldn’t be rendered.") }
             return result
         }.value
     }

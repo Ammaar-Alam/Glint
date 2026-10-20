@@ -221,7 +221,7 @@ struct VideoProject: Codable, Equatable, Sendable {
               edits.backgroundFile.map({ backgroundFiles.contains($0) }) ?? true,
               edits.trimStart.isFinite, edits.trimEnd.isFinite,
               editedDuration > 0 else {
-            throw CliptError.message("This video project is incomplete or unsupported.")
+            throw GlintError.message("This video project is incomplete or unsupported.")
         }
         let numbers = [edits.padding, edits.cornerRadius, edits.shadow, edits.cursorScale, edits.cursorSmoothing,
                        edits.cameraSize, edits.systemVolume, edits.microphoneVolume, edits.motionBlur, edits.keystrokeScale,
@@ -241,7 +241,7 @@ struct VideoProject: Codable, Equatable, Sendable {
               zip(cursorSamples, cursorSamples.dropFirst()).allSatisfy({ $0.0.time <= $0.1.time }),
               zip(clicks, clicks.dropFirst()).allSatisfy({ $0.0.time <= $0.1.time }),
               zip(keystrokes, keystrokes.dropFirst()).allSatisfy({ $0.0.time <= $0.1.time }) else {
-            throw CliptError.message("This video project contains invalid edit data.")
+            throw GlintError.message("This video project contains invalid edit data.")
         }
         return self
     }
@@ -257,7 +257,7 @@ struct VideoProject: Codable, Equatable, Sendable {
             let url = directory.appendingPathComponent(file)
             let resolved = url.resolvingSymlinksInPath().standardizedFileURL
             guard resolved.deletingLastPathComponent().path == directory.resolvingSymlinksInPath().standardizedFileURL.path else {
-                throw CliptError.message("This project references a file outside its folder.")
+                throw GlintError.message("This project references a file outside its folder.")
             }
         }
         return project

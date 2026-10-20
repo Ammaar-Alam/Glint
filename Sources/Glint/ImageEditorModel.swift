@@ -57,7 +57,7 @@ final class ImageEditorModel: ObservableObject {
     init(url: URL, onExport: @escaping (URL) -> Void) {
         inputURL = url
         self.onExport = onExport
-        if url.pathExtension.lowercased() == "clipt" { projectURL = url }
+        if url.pathExtension.lowercased() == "glint" { projectURL = url }
         if let data = UserDefaults.standard.data(forKey: "imageBackgroundPresets"),
            let presets = try? JSONDecoder().decode([ImageBackground].self, from: data) {
             backgroundPresets = presets.filter(\.isValid)
@@ -126,7 +126,7 @@ final class ImageEditorModel: ObservableObject {
     }
 
     func snapshot() throws -> ImageProjectContents {
-        guard let document, let source else { throw CliptError.message("The image is still opening.") }
+        guard let document, let source else { throw GlintError.message("The image is still opening.") }
         return ImageProjectContents(document: document, source: source, insertedImages: insertedImages)
     }
 
@@ -298,7 +298,7 @@ final class ImageEditorModel: ObservableObject {
             do {
                 let image = try await Task.detached(priority: .userInitiated) { try ImageProject.readImage(url) }.value
                 guard let document else { return }
-                guard image.width * image.height <= 80_000_000 else { throw CliptError.message("This image is too large to insert.") }
+                guard image.width * image.height <= 80_000_000 else { throw GlintError.message("This image is too large to insert.") }
                 let id = UUID()
                 insertedImages[id] = image
                 let appendRight = beside || (point.map { $0.x >= document.cropRect.maxX } ?? false)
@@ -398,7 +398,7 @@ final class ImageEditorModel: ObservableObject {
         }
     }
 
-    private static let presetDirectory = URL.applicationSupportDirectory.appendingPathComponent("Clipt/Backgrounds", isDirectory: true)
+    private static let presetDirectory = URL.applicationSupportDirectory.appendingPathComponent("Glint/Backgrounds", isDirectory: true)
 
     func applyBackgroundPreset(_ preset: ImageBackground) {
         let request = UUID()
@@ -471,7 +471,7 @@ final class ImageEditorModel: ObservableObject {
                 }.value
                 guard !Task.isCancelled, !isClosed else { return }
                 try clipboard.commit(request) {
-                    guard $0.setData(data, forType: .png) else { throw CliptError.message("The image couldn’t be copied.") }
+                    guard $0.setData(data, forType: .png) else { throw GlintError.message("The image couldn’t be copied.") }
                 }
             } catch { errorMessage = error.localizedDescription }
         }
@@ -480,14 +480,14 @@ final class ImageEditorModel: ObservableObject {
     nonisolated static func pngData(_ image: CGImage) throws -> Data {
         let data = NSMutableData()
         guard let destination = CGImageDestinationCreateWithData(data, UTType.png.identifier as CFString, 1, nil) else {
-            throw CliptError.message("The image couldn’t be encoded.")
+            throw GlintError.message("The image couldn’t be encoded.")
         }
         CGImageDestinationAddImage(destination, image, nil)
-        guard CGImageDestinationFinalize(destination) else { throw CliptError.message("The image couldn’t be encoded.") }
+        guard CGImageDestinationFinalize(destination) else { throw GlintError.message("The image couldn’t be encoded.") }
         return data as Data
     }
 
-    private static let annotationsPasteboardType = NSPasteboard.PasteboardType("app.clipt.annotations")
+    private static let annotationsPasteboardType = NSPasteboard.PasteboardType("app.glint.annotations")
 
     func copySelection(cut: Bool = false) {
         guard !selectedAnnotations.isEmpty else { copyImage(); return }
@@ -509,7 +509,7 @@ final class ImageEditorModel: ObservableObject {
                 guard !Task.isCancelled, !isClosed else { return }
                 guard try clipboard.commit(request, writing: {
                     guard $0.setData(data, forType: Self.annotationsPasteboardType) else {
-                        throw CliptError.message("The selection couldn’t be copied.")
+                        throw GlintError.message("The selection couldn’t be copied.")
                     }
                 }) else { return }
                 if cut {
@@ -530,21 +530,21 @@ final class ImageEditorModel: ObservableObject {
                 defer { busy = false }
                 do {
                     let pasted = try await Task.detached(priority: .userInitiated) {
-                        guard data.count <= 250_000_000 else { throw CliptError.message("This selection is too large to paste.") }
+                        guard data.count <= 250_000_000 else { throw GlintError.message("This selection is too large to paste.") }
                         let content = try JSONDecoder().decode(ImageAnnotationClipboard.self, from: data)
                         guard content.annotations.count <= 10_000, content.annotations.allSatisfy(\.isValid) else {
-                            throw CliptError.message("This selection contains invalid annotations.")
+                            throw GlintError.message("This selection contains invalid annotations.")
                         }
                         var assets: [UUID: CGImage] = [:]
                         var mapping: [UUID: UUID] = [:]
                         var totalPixels = 0
                         for id in Set(content.annotations.compactMap(\.imageID)) {
                             guard let data = content.images[id], let source = CGImageSourceCreateWithData(data as CFData, nil) else {
-                                throw CliptError.message("An image in this selection couldn’t be opened.")
+                                throw GlintError.message("An image in this selection couldn’t be opened.")
                             }
                             let image = try ImageProject.readImage(source)
                             totalPixels += image.width * image.height
-                            guard totalPixels <= 160_000_000 else { throw CliptError.message("This selection contains too many large images.") }
+                            guard totalPixels <= 160_000_000 else { throw GlintError.message("This selection contains too many large images.") }
                             let replacement = UUID()
                             assets[replacement] = image
                             mapping[id] = replacement

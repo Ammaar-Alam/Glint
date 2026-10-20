@@ -5,7 +5,7 @@ import SwiftUI
 import UniformTypeIdentifiers
 
 @main
-struct CliptMain {
+struct GlintMain {
     @MainActor static func main() {
         let app = NSApplication.shared
         let delegate = AppDelegate()
@@ -45,11 +45,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let launchReason = launchEvent?.paramDescriptor(forKeyword: keyAEPropData)?.enumCodeValue
         let launchInBackground = launchEvent?.eventID == kAEOpenApplication &&
             (launchReason == keyAELaunchedAsLogInItem || launchReason == keyAELaunchedAsServiceItem)
-        UserDefaults.standard.register(defaults: ["windowShadow": true, "afterCapture": "popup", "shelfPosition": "bottomLeft", "filenameTemplate": "Clipt {date} at {time}"])
+        UserDefaults.standard.register(defaults: ["windowShadow": true, "afterCapture": "popup", "shelfPosition": "bottomLeft", "filenameTemplate": "Glint {date} at {time}"])
         makeMainMenu()
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
-        statusItem.button?.image = NSImage(systemSymbolName: "viewfinder", accessibilityDescription: "Clipt")
-        statusItem.button?.toolTip = "Clipt"
+        statusItem.button?.image = Self.menuBarIcon
+        statusItem.button?.toolTip = "Glint"
         let menu = NSMenu()
         menu.delegate = self
         statusItem.menu = menu
@@ -109,20 +109,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         guard terminationTask == nil else { return }
         for url in urls {
             if url.isFileURL { importFile(url, openEditor: true); continue }
-            guard url.scheme == "clipt" else { continue }
+            guard url.scheme == "glint" else { continue }
             guard UserDefaults.standard.bool(forKey: "automationEnabled") else {
-                showError(CliptError.message("Enable Allow capture URLs in Clipt Settings to use automation."))
+                showError(GlintError.message("Enable Allow capture URLs in Glint Settings to use automation."))
                 continue
             }
             switch url.host {
             case "capture":
                 let value = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems?.first(where: { $0.name == "mode" })?.value ?? "area"
                 if let mode = CaptureMode(rawValue: value) { takeCapture(mode) }
-                else { showError(CliptError.message("This capture mode isn’t supported.")) }
+                else { showError(GlintError.message("This capture mode isn’t supported.")) }
             case "record": showRecordingSetup()
             case "stop": stopRecording()
             case "history": showHistory()
-            default: showError(CliptError.message("This Clipt command isn’t supported."))
+            default: showError(GlintError.message("This Glint command isn’t supported."))
             }
         }
     }
@@ -139,13 +139,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     private func prepareToTerminate() async -> Bool {
         if captureTask != nil || pendingWrites > 0 || recorder.state == .stopping {
-            showError(CliptError.message("Finish or cancel the current capture or save before quitting."))
+            showError(GlintError.message("Finish or cancel the current capture or save before quitting."))
             return false
         }
         if recorder.state != .idle {
             let alert = NSAlert()
             alert.messageText = recorder.state == .preparing ? "Cancel recording and quit?" : "Finish recording and quit?"
-            alert.informativeText = "Your recording will be kept in Clipt."
+            alert.informativeText = "Your recording will be kept in Glint."
             alert.addButton(withTitle: recorder.state == .preparing ? "Cancel and Quit" : "Finish and Quit")
             alert.addButton(withTitle: "Keep Open")
             guard alert.runModal() == .alertFirstButtonReturn else { return false }
@@ -161,7 +161,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             if let editor = editor as? EditorClosing, !(await editor.prepareToClose()) { return false }
         }
         if pendingWrites > 0 || captureTask != nil || capture.isCapturing || recorder.state != .idle || recordingTask != nil {
-            showError(CliptError.message("Clipt is still finishing your work. Try quitting again when it finishes."))
+            showError(GlintError.message("Glint is still finishing your work. Try quitting again when it finishes."))
             return false
         }
         return true
@@ -196,8 +196,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
         menu.addItem(.separator())
         menu.addItem(HandlerMenuItem("Settings…", key: ",") { [weak self] in self?.showSettings() })
-        menu.addItem(HandlerMenuItem("About Clipt") { NSApp.orderFrontStandardAboutPanel(nil); NSApp.activate(ignoringOtherApps: true) })
-        menu.addItem(HandlerMenuItem("Quit Clipt", key: "q") { NSApp.terminate(nil) })
+        menu.addItem(HandlerMenuItem("About Glint") { NSApp.orderFrontStandardAboutPanel(nil); NSApp.activate(ignoringOtherApps: true) })
+        menu.addItem(HandlerMenuItem("Quit Glint", key: "q") { NSApp.terminate(nil) })
     }
 
     private func addCaptureCommands(to menu: NSMenu) {
@@ -219,11 +219,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     private func makeMainMenu() {
         let main = NSMenu()
-        let appMenu = NSMenu(title: "Clipt")
+        let appMenu = NSMenu(title: "Glint")
         appMenu.addItem(HandlerMenuItem("Settings…", key: ",") { [weak self] in self?.showSettings() })
         appMenu.addItem(.separator())
-        appMenu.addItem(HandlerMenuItem("Quit Clipt", key: "q") { NSApp.terminate(nil) })
-        let appItem = NSMenuItem(title: "Clipt", action: nil, keyEquivalent: "")
+        appMenu.addItem(HandlerMenuItem("Quit Glint", key: "q") { NSApp.terminate(nil) })
+        let appItem = NSMenuItem(title: "Glint", action: nil, keyEquivalent: "")
         appItem.submenu = appMenu
         main.addItem(appItem)
         let fileMenu = NSMenu(title: "File")
@@ -332,7 +332,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     func openFile() {
         guard terminationTask == nil else { return }
         let panel = NSOpenPanel()
-        panel.allowedContentTypes = [.image, .movie, UTType(exportedAs: "app.clipt.image-project", conformingTo: .package), UTType(exportedAs: "app.clipt.video-project", conformingTo: .package)]
+        panel.allowedContentTypes = [.image, .movie, UTType(exportedAs: "app.glint.image-project", conformingTo: .package), UTType(exportedAs: "app.glint.video-project", conformingTo: .package)]
         panel.allowsMultipleSelection = true
         panel.canChooseDirectories = false
         NSApp.activate(ignoringOtherApps: true)
@@ -357,13 +357,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                     edit(item)
                 } catch { showError(error) }
             }
-        } else { showError(CliptError.message("Copy an image or video file first.")) }
+        } else { showError(GlintError.message("Copy an image or video file first.")) }
     }
 
     func edit(_ item: CaptureItem) {
         guard terminationTask == nil else { return }
         let url = item.url(in: library.root)
-        guard FileManager.default.fileExists(atPath: url.path) else { showError(CliptError.message("This capture is no longer available.")); return }
+        guard FileManager.default.fileExists(atPath: url.path) else { showError(GlintError.message("This capture is no longer available.")); return }
         let exported: (URL) -> Void = { [weak self] url in self?.importFile(url, openEditor: false) }
         let editor: NSWindowController
         if item.kind.isVideo { editor = VideoEditorWindowController(url: url, onExport: exported) }
@@ -409,14 +409,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 let data = try await Task.detached { () -> Data in
                     let image = try ImageProject.readImage(url)
                     let output = NSMutableData()
-                    guard let dest = CGImageDestinationCreateWithData(output, UTType.png.identifier as CFString, 1, nil) else { throw CliptError.message("The image couldn’t be copied.") }
+                    guard let dest = CGImageDestinationCreateWithData(output, UTType.png.identifier as CFString, 1, nil) else { throw GlintError.message("The image couldn’t be copied.") }
                     CGImageDestinationAddImage(dest, image, nil)
-                    guard CGImageDestinationFinalize(dest) else { throw CliptError.message("The image couldn’t be copied.") }
+                    guard CGImageDestinationFinalize(dest) else { throw GlintError.message("The image couldn’t be copied.") }
                     return output as Data
                 }.value
                 guard !Task.isCancelled else { return }
                 try clipboard.commit(request) {
-                    guard $0.setData(data, forType: .png) else { throw CliptError.message("The image couldn’t be copied.") }
+                    guard $0.setData(data, forType: .png) else { throw GlintError.message("The image couldn’t be copied.") }
                 }
             } catch is CancellationError {} catch { showError(error) }
         }
@@ -446,7 +446,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             do {
                 let url = try renderedImageURL(item)
                 let data = try await Task.detached { try Data(contentsOf: url) }.value
-                guard let image = NSImage(data: data) else { throw CliptError.message("The image couldn’t be opened.") }
+                guard let image = NSImage(data: data) else { throw GlintError.message("The image couldn’t be opened.") }
                 let panel = PinnedImagePanel(image: image)
                 panel.onEdit = { [weak self] in self?.edit(item) }
                 panel.onClose = { [weak self, weak panel] in self?.pins.removeAll { $0 === panel } }
@@ -459,7 +459,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     private func renderedImageURL(_ item: CaptureItem) throws -> URL {
         guard let url = item.shareURL(in: library.root), FileManager.default.fileExists(atPath: url.path) else {
-            throw CliptError.message("Open this project in the editor and export it before sharing.")
+            throw GlintError.message("Open this project in the editor and export it before sharing.")
         }
         return url
     }
@@ -471,7 +471,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     func showHistory() {
         if historyWindow == nil {
-            historyWindow = makeWindow(title: "Clipt", size: NSSize(width: 960, height: 640), root: HistoryView(
+            historyWindow = makeWindow(title: "Glint", size: NSSize(width: 960, height: 640), root: HistoryView(
                 library: library, onEdit: edit, onCopy: copy, onSave: save, onPin: pin, onImport: openFile,
                 onCapture: { [weak self] in self?.takeCapture(.area) }
             ))
@@ -481,7 +481,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     func showSettings() {
-        if settingsWindow == nil { settingsWindow = makeWindow(title: "Clipt Settings", size: NSSize(width: 600, height: 590), root: SettingsView(shortcuts: shortcuts)) }
+        if settingsWindow == nil { settingsWindow = makeWindow(title: "Glint Settings", size: NSSize(width: 600, height: 590), root: SettingsView(shortcuts: shortcuts)) }
         settingsWindow?.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
     }
@@ -534,7 +534,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             do {
                 let item = try await finishRecording()
                 edit(item)
-                if let warning = recorder.lastWarning { showError(CliptError.message(warning)) }
+                if let warning = recorder.lastWarning { showError(GlintError.message(warning)) }
             } catch { showError(error) }
         }
     }
@@ -563,7 +563,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let recordings = try RecordingController.recordingsDirectory().resolvingSymlinksInPath().standardizedFileURL
         let source = url.resolvingSymlinksInPath().standardizedFileURL
         if source.deletingLastPathComponent() == recordings,
-           source.pathExtension == "cliptvideo",
+           source.pathExtension == "glintvideo",
            !FileManager.default.fileExists(atPath: source.appendingPathComponent("recording-in-progress").path) {
             do {
                 try await Task.detached(priority: .utility) {
@@ -603,10 +603,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             statusItem.button?.image = NSImage(systemSymbolName: recorder.state == .paused ? "pause.circle.fill" : "record.circle.fill", accessibilityDescription: "Recording")
             statusItem.button?.title = " " + Self.duration(recorder.elapsed)
         } else {
-            statusItem.button?.image = NSImage(systemSymbolName: "viewfinder", accessibilityDescription: "Clipt")
+            statusItem.button?.image = Self.menuBarIcon
             statusItem.button?.title = ""
         }
     }
+
+    // bundled template mark, falls back to a system symbol when run outside the app bundle
+    static let menuBarIcon: NSImage? = {
+        guard let url = Bundle.main.url(forResource: "glint-mark", withExtension: "svg"),
+              let image = NSImage(contentsOf: url) else { return NSImage(systemSymbolName: "viewfinder", accessibilityDescription: "Glint") }
+        image.size = NSSize(width: 17, height: 17)
+        image.isTemplate = true
+        image.accessibilityDescription = "Glint"
+        return image
+    }()
 
     static func duration(_ seconds: TimeInterval) -> String {
         let value = max(0, Int(seconds))
@@ -626,7 +636,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 enum ExportFile {
     static func copy(_ source: URL, to destination: URL) throws {
         guard source.standardizedFileURL != destination.standardizedFileURL else { return }
-        let temporary = destination.deletingLastPathComponent().appendingPathComponent(".clipt-export-\(UUID().uuidString).\(destination.pathExtension)")
+        let temporary = destination.deletingLastPathComponent().appendingPathComponent(".glint-export-\(UUID().uuidString).\(destination.pathExtension)")
         do {
             try FileManager.default.copyItem(at: source, to: temporary)
             if FileManager.default.fileExists(atPath: destination.path) {

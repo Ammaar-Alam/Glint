@@ -1,7 +1,7 @@
 import XCTest
 import CoreGraphics
 import CoreImage
-@testable import Clipt
+@testable import Glint
 
 final class CaptureTests: XCTestCase {
     func testDisplayCoordinatesRoundTripAcrossDisplays() {
@@ -99,14 +99,14 @@ final class CaptureTests: XCTestCase {
 
     func testQRPayloadIsRecognizedLocally() async throws {
         let generator = try XCTUnwrap(CIFilter(name: "CIQRCodeGenerator"))
-        generator.setValue(Data("Clipt capture check".utf8), forKey: "inputMessage")
+        generator.setValue(Data("Glint capture check".utf8), forKey: "inputMessage")
         let output = try XCTUnwrap(generator.outputImage?.transformed(by: CGAffineTransform(scaleX: 10, y: 10)))
         let image = try XCTUnwrap(CIContext(options: [.useSoftwareRenderer: true]).createCGImage(output, from: output.extent))
-        let url = FileManager.default.temporaryDirectory.appendingPathComponent("Clipt-OCR-test-\(UUID().uuidString).png")
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("Glint-OCR-test-\(UUID().uuidString).png")
         defer { try? FileManager.default.removeItem(at: url) }
         try ImageFile.write(image, to: url)
         let recognized = try await OCRService.recognize(url: url)
-        XCTAssertTrue(recognized.contains("Clipt capture check"))
+        XCTAssertTrue(recognized.contains("Glint capture check"))
     }
 
     func testFrozenSelectionUsesOriginalPixelsAndRetinaCoordinates() async throws {

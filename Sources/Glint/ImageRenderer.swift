@@ -21,7 +21,7 @@ enum ImageRenderer {
                 drawAnnotation(annotation, context: work, imageBounds: crop, insertedImages: contents.insertedImages)
             }
         }
-        guard let content = work.makeImage() else { throw CliptError.message("The image couldn’t be rendered.") }
+        guard let content = work.makeImage() else { throw GlintError.message("The image couldn’t be rendered.") }
         try Task.checkCancellation()
         if !document.background.enabled && document.quarterTurns == 0 && !document.flipHorizontal && !document.flipVertical { return content }
         let inset = document.backgroundInset
@@ -43,7 +43,7 @@ enum ImageRenderer {
         styled.concatenate(document.originalToCanvas.concatenating(CGAffineTransform(
             translationX: inset - document.contentOrigin.x, y: inset - document.contentOrigin.y)))
         drawImage(content, in: crop, context: styled)
-        guard let styledImage = styled.makeImage() else { throw CliptError.message("The image couldn’t be styled.") }
+        guard let styledImage = styled.makeImage() else { throw GlintError.message("The image couldn’t be styled.") }
         if !document.background.enabled { return styledImage }
         let final = try bitmap(size: document.canvasSize, scale: scale)
         final.scaleBy(x: scale, y: scale)
@@ -51,7 +51,7 @@ enum ImageRenderer {
         if document.background.enabled {
             let background = document.background
             if let imageID = background.imageID {
-                guard let image = contents.insertedImages[imageID] else { throw CliptError.message("The background image is missing.") }
+                guard let image = contents.insertedImages[imageID] else { throw GlintError.message("The background image is missing.") }
                 let ratio = max(canvasBounds.width / CGFloat(image.width), canvasBounds.height / CGFloat(image.height))
                 let size = CGSize(width: CGFloat(image.width) * ratio, height: CGFloat(image.height) * ratio)
                 drawImage(image, in: CGRect(x: canvasBounds.midX - size.width / 2, y: canvasBounds.midY - size.height / 2,
@@ -73,7 +73,7 @@ enum ImageRenderer {
         }
         drawImage(styledImage, in: CGRect(x: document.contentOrigin.x - inset, y: document.contentOrigin.y - inset,
                                          width: styledSize.width, height: styledSize.height), context: final)
-        guard let result = final.makeImage() else { throw CliptError.message("The image couldn’t be rendered.") }
+        guard let result = final.makeImage() else { throw GlintError.message("The image couldn’t be rendered.") }
         return result
     }
 
@@ -86,7 +86,7 @@ enum ImageRenderer {
                                       bitsPerComponent: 8, bytesPerRow: width * 4,
                                       space: CGColorSpace(name: CGColorSpace.sRGB)!,
                                       bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else {
-            throw CliptError.message("This image is too large to render. Try a smaller export size.")
+            throw GlintError.message("This image is too large to render. Try a smaller export size.")
         }
         context.translateBy(x: 0, y: CGFloat(height))
         context.scaleBy(x: 1, y: -1)
@@ -206,7 +206,7 @@ enum ImageRenderer {
         let pixelRect = CGRect(x: (rect.minX - crop.minX) * scale, y: (rect.minY - crop.minY) * scale,
                                width: rect.width * scale, height: rect.height * scale).integral
         guard let snapshot = context.makeImage(), let region = snapshot.cropping(to: pixelRect) else {
-            throw CliptError.message("The selected area couldn’t be obscured.")
+            throw GlintError.message("The selected area couldn’t be obscured.")
         }
         let input = CIImage(cgImage: region)
         let result: CIImage
@@ -222,7 +222,7 @@ enum ImageRenderer {
         }
         let renderer = CIContext(options: [.cacheIntermediates: false])
         guard let image = renderer.createCGImage(result, from: input.extent) else {
-            throw CliptError.message("The selected area couldn’t be obscured.")
+            throw GlintError.message("The selected area couldn’t be obscured.")
         }
         drawImage(image, in: rect, context: context)
     }

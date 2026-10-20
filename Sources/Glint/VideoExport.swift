@@ -36,17 +36,17 @@ enum VideoExporter {
                        progress: @escaping @Sendable (Double) -> Void) async throws {
         try Task.checkCancellation()
         _ = try project.validated()
-        if format == .gif, !(1...50).contains(gifFrameRate) { throw CliptError.message("Choose a GIF frame rate between 1 and 50.") }
-        guard destination.isFileURL else { throw CliptError.message("Choose a local destination for the export.") }
+        if format == .gif, !(1...50).contains(gifFrameRate) { throw GlintError.message("Choose a GIF frame rate between 1 and 50.") }
+        guard destination.isFileURL else { throw GlintError.message("Choose a local destination for the export.") }
         let resolvedDestination = destination.resolvingSymlinksInPath().standardizedFileURL
         let projectFiles = [project.screenFile, project.cameraFile, "project.json"].compactMap { $0 } + project.backgroundFiles
         let protectedURLs = projectFiles.map { directory.appendingPathComponent($0) }
             + (backgroundDirectory.map { workspace in project.backgroundFiles.map { workspace.appendingPathComponent($0) } } ?? [])
         guard !protectedURLs.contains(where: {
             $0.resolvingSymlinksInPath().standardizedFileURL == resolvedDestination
-        }) else { throw CliptError.message("Choose a different destination to preserve the editable project’s original media.") }
+        }) else { throw GlintError.message("Choose a different destination to preserve the editable project’s original media.") }
         let composition = try await VideoCompositionBuilder.make(project: project, directory: directory, includeEffects: format != .original, backgroundDirectory: backgroundDirectory)
-        let temporary = destination.deletingLastPathComponent().appendingPathComponent(".Clipt-\(UUID().uuidString).\(format.fileExtension)")
+        let temporary = destination.deletingLastPathComponent().appendingPathComponent(".Glint-\(UUID().uuidString).\(format.fileExtension)")
         defer { try? FileManager.default.removeItem(at: temporary) }
         progress(0)
         switch format {
@@ -75,7 +75,7 @@ enum VideoExporter {
             videoSettings: [kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA])
         videoOutput.videoComposition = composition.videoComposition
         videoOutput.alwaysCopiesSampleData = false
-        guard reader.canAdd(videoOutput) else { throw CliptError.message("The video couldn’t be prepared for export.") }
+        guard reader.canAdd(videoOutput) else { throw GlintError.message("The video couldn’t be prepared for export.") }
         reader.add(videoOutput)
         let size = composition.videoComposition.renderSize
         let fps = min(60, project.frameRate)
@@ -84,10 +84,10 @@ enum VideoExporter {
             AVVideoCompressionPropertiesKey: [AVVideoAverageBitRateKey: videoBitRate(project: project),
                 AVVideoExpectedSourceFrameRateKey: fps, AVVideoMaxKeyFrameIntervalKey: fps * 2,
                 AVVideoProfileLevelKey: AVVideoProfileLevelH264HighAutoLevel]]
-        guard writer.canApply(outputSettings: settings, forMediaType: .video) else { throw CliptError.message("Choose a smaller export size for this Mac’s encoder.") }
+        guard writer.canApply(outputSettings: settings, forMediaType: .video) else { throw GlintError.message("Choose a smaller export size for this Mac’s encoder.") }
         let videoInput = AVAssetWriterInput(mediaType: .video, outputSettings: settings)
         videoInput.expectsMediaDataInRealTime = false
-        guard writer.canAdd(videoInput) else { throw CliptError.message("The video encoder couldn’t be started.") }
+        guard writer.canAdd(videoInput) else { throw GlintError.message("The video encoder couldn’t be started.") }
         writer.add(videoInput)
         let audioTracks = try await composition.asset.loadTracks(withMediaType: .audio)
         var audioOutput: AVAssetReaderAudioMixOutput?
@@ -99,16 +99,16 @@ enum VideoExporter {
             output.audioMix = composition.audioMix; output.alwaysCopiesSampleData = false
             let input = AVAssetWriterInput(mediaType: .audio, outputSettings: [AVFormatIDKey: kAudioFormatMPEG4AAC,
                 AVSampleRateKey: 48000, AVNumberOfChannelsKey: 2, AVEncoderBitRateKey: 192000])
-            guard reader.canAdd(output), writer.canAdd(input) else { throw CliptError.message("The recording’s audio couldn’t be prepared for export.") }
+            guard reader.canAdd(output), writer.canAdd(input) else { throw GlintError.message("The recording’s audio couldn’t be prepared for export.") }
             reader.add(output); writer.add(input)
             audioOutput = output; audioInput = input
         }
         try await withTaskCancellationHandler {
             do {
                 try Task.checkCancellation()
-                guard writer.startWriting() else { throw writer.error ?? CliptError.message("The video encoder couldn’t start.") }
+                guard writer.startWriting() else { throw writer.error ?? GlintError.message("The video encoder couldn’t start.") }
                 writer.startSession(atSourceTime: .zero)
-                guard reader.startReading() else { throw reader.error ?? CliptError.message("The video couldn’t be read.") }
+                guard reader.startReading() else { throw reader.error ?? GlintError.message("The video couldn’t be read.") }
                 try await withThrowingTaskGroup(of: Void.self) { group in
                     group.addTask { try await transfer(output: videoOutput, input: videoInput, reader: reader, writer: writer, duration: composition.duration, progress: progress) }
                     if let audioOutput, let audioInput {
@@ -121,11 +121,11 @@ enum VideoExporter {
                     }
                 }
                 try Task.checkCancellation()
-                guard reader.status == .completed else { throw reader.error ?? CliptError.message("The video couldn’t be read completely.") }
+                guard reader.status == .completed else { throw reader.error ?? GlintError.message("The video couldn’t be read completely.") }
                 writer.endSession(atSourceTime: CMTime(seconds: composition.duration, preferredTimescale: 600))
                 await writer.finishWriting()
                 try Task.checkCancellation()
-                guard writer.status == .completed else { throw writer.error ?? CliptError.message("The export couldn’t finish. Check available disk space.") }
+                guard writer.status == .completed else { throw writer.error ?? GlintError.message("The export couldn’t finish. Check available disk space.") }
             } catch {
                 reader.cancelReading()
                 if writer.status == .writing || writer.status == .unknown { writer.cancelWriting() }
@@ -141,19 +141,19 @@ enum VideoExporter {
                                  writer: AVAssetWriter, duration: Double, progress: (@Sendable (Double) -> Void)?) async throws {
         while true {
             try Task.checkCancellation()
-            guard writer.status == .writing else { throw writer.error ?? CliptError.message("The export stopped writing.") }
-            guard reader.status != .failed else { throw reader.error ?? CliptError.message("The export stopped reading.") }
+            guard writer.status == .writing else { throw writer.error ?? GlintError.message("The export stopped writing.") }
+            guard reader.status != .failed else { throw reader.error ?? GlintError.message("The export stopped reading.") }
             guard input.isReadyForMoreMediaData else {
                 try await Task.sleep(for: .milliseconds(4))
                 continue
             }
             guard let sample = autoreleasepool(invoking: { output.copyNextSampleBuffer() }) else {
-                if reader.status == .failed { throw reader.error ?? CliptError.message("A video frame couldn’t be decoded.") }
+                if reader.status == .failed { throw reader.error ?? GlintError.message("A video frame couldn’t be decoded.") }
                 try Task.checkCancellation()
                 input.markAsFinished()
                 return
             }
-            guard input.append(sample) else { throw writer.error ?? CliptError.message("The export couldn’t write a frame.") }
+            guard input.append(sample) else { throw writer.error ?? GlintError.message("The export couldn’t write a frame.") }
             progress?(min(0.99, max(0, sample.presentationTimeStamp.seconds / duration)))
         }
     }
@@ -161,7 +161,7 @@ enum VideoExporter {
     private static func passthrough(composition: VideoCompositionResult, destination: URL,
                                      progress: @escaping @Sendable (Double) -> Void) async throws {
         guard let session = AVAssetExportSession(asset: composition.asset, presetName: AVAssetExportPresetPassthrough),
-              session.supportedFileTypes.contains(.mov) else { throw CliptError.message("This source can’t be exported without conversion. Choose MP4 instead.") }
+              session.supportedFileTypes.contains(.mov) else { throw GlintError.message("This source can’t be exported without conversion. Choose MP4 instead.") }
         // cancellation is supported during export while session configuration stays local
         nonisolated(unsafe) let cancellationSession = session
         let monitor = Task {
@@ -184,7 +184,7 @@ enum VideoExporter {
             func boundary(_ frame: Int) -> Int { (frame * 100 + fps / 2) / fps }
             var frameCount = max(1, (ticks * fps + 99) / 100)
             if frameCount > 1, ticks - boundary(frameCount - 1) < 2 { frameCount -= 1 }
-            guard let output = CGImageDestinationCreateWithURL(destination as CFURL, UTType.gif.identifier as CFString, frameCount, nil) else { throw CliptError.message("The GIF couldn’t be created.") }
+            guard let output = CGImageDestinationCreateWithURL(destination as CFURL, UTType.gif.identifier as CFString, frameCount, nil) else { throw GlintError.message("The GIF couldn’t be created.") }
             CGImageDestinationSetProperties(output, [kCGImagePropertyGIFDictionary: [kCGImagePropertyGIFLoopCount: 0]] as CFDictionary)
             let generator = AVAssetImageGenerator(asset: composition.asset)
             generator.videoComposition = composition.videoComposition
@@ -201,7 +201,7 @@ enum VideoExporter {
                     }
                     progress(min(0.99, Double(frame + 1) / Double(frameCount)))
                 }
-                guard CGImageDestinationFinalize(output) else { throw CliptError.message("The GIF couldn’t be finished. Check available disk space.") }
+                guard CGImageDestinationFinalize(output) else { throw GlintError.message("The GIF couldn’t be finished. Check available disk space.") }
             } catch { generator.cancelAllCGImageGeneration(); throw error }
         }
         try await withTaskCancellationHandler { try await renderTask.value } onCancel: { renderTask.cancel() }
