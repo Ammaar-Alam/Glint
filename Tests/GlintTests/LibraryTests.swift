@@ -152,4 +152,13 @@ final class LibraryTests: XCTestCase {
         video.kind = .videoProject
         XCTAssertNil(video.shareURL(in: library.root))
     }
+
+    @MainActor
+    func testQuickAccessFitsShortScreens() {
+        XCTAssertEqual(QuickAccessPanel.cardsThatFit(height: 1000, footer: true), 4)
+        XCTAssertEqual(QuickAccessPanel.cardsThatFit(height: 600, footer: true), 3)
+        XCTAssertEqual(QuickAccessPanel.cardsThatFit(height: 100, footer: false), 1)
+        let three = 14 * 2 + 3 * 146 + 2 * 10 + 22 + 10
+        XCTAssertLessThanOrEqual(three, 600)
+    }
 }
