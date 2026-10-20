@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+    <key>CFBundleName</key><string>Clipt</string>
+    <key>CFBundleDisplayName</key><string>Clipt</string>
+    <key>CFBundleIdentifier</key><string>app.clipt.mac</string>
+    <key>CFBundleExecutable</key><string>Clipt</string>
+    <key>CFBundlePackageType</key><string>APPL</string>
+    <key>CFBundleShortVersionString</key><string>0.1.0</string>
+    <key>CFBundleVersion</key><string>1</string>
+    <key>CFBundleIconFile</key><string>AppIcon</string>
+    <key>LSMinimumSystemVersion</key><string>15.0</string>
+    <key>LSUIElement</key><true/>
+    <key>NSPrincipalClass</key><string>NSApplication</string>
+    <key>NSHighResolutionCapable</key><true/>
+    <key>NSCameraUsageDescription</key><string>Clipt uses the camera when you include it in a recording.</string>
+    <key>NSMicrophoneUsageDescription</key><string>Clipt uses the microphone when you include it in a recording.</string>
+    <key>NSAudioCaptureUsageDescription</key><string>Clipt captures system audio when you include it in a recording.</string>
+    <key>CFBundleURLTypes</key><array><dict>
+        <key>CFBundleURLName</key><string>app.clipt.mac</string>
+        <key>CFBundleURLSchemes</key><array><string>clipt</string></array>
+    </dict></array>
+    <key>CFBundleDocumentTypes</key><array>
+        <dict><key>CFBundleTypeName</key><string>Image</string><key>CFBundleTypeRole</key><string>Viewer</string><key>LSHandlerRank</key><string>Alternate</string><key>LSItemContentTypes</key><array><string>public.image</string></array></dict>
+        <dict><key>CFBundleTypeName</key><string>Video</string><key>CFBundleTypeRole</key><string>Viewer</string><key>LSHandlerRank</key><string>Alternate</string><key>LSItemContentTypes</key><array><string>public.movie</string></array></dict>
+        <dict><key>CFBundleTypeName</key><string>Clipt Image Project</string><key>CFBundleTypeRole</key><string>Editor</string><key>LSHandlerRank</key><string>Owner</string><key>LSTypeIsPackage</key><true/><key>LSItemContentTypes</key><array><string>app.clipt.image-project</string></array></dict>
+        <dict><key>CFBundleTypeName</key><string>Clipt Video Project</string><key>CFBundleTypeRole</key><string>Editor</string><key>LSHandlerRank</key><string>Owner</string><key>LSTypeIsPackage</key><true/><key>LSItemContentTypes</key><array><string>app.clipt.video-project</string></array></dict>
+    </array>
+    <key>UTExportedTypeDeclarations</key><array>
+        <dict><key>UTTypeIdentifier</key><string>app.clipt.image-project</string><key>UTTypeDescription</key><string>Clipt Image Project</string><key>UTTypeConformsTo</key><array><string>com.apple.package</string></array><key>UTTypeTagSpecification</key><dict><key>public.filename-extension</key><array><string>clipt</string></array></dict></dict>
+        <dict><key>UTTypeIdentifier</key><string>app.clipt.video-project</string><key>UTTypeDescription</key><string>Clipt Video Project</string><key>UTTypeConformsTo</key><array><string>com.apple.package</string></array><key>UTTypeTagSpecification</key><dict><key>public.filename-extension</key><array><string>cliptvideo</string></array></dict></dict>
+    </array>
+</dict></plist>
