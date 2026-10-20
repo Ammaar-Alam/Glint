@@ -143,7 +143,7 @@ final class ImageEditorWindowController: NSWindowController, NSWindowDelegate, E
             let url = await onCapture()
             model.busy = false
             showWindow(nil)
-            if let url { model.addImage(url: url, beside: true) }
+            if let url { model.addImage(url: url, beside: true, ownsTemporary: true) }
         }
     }
 

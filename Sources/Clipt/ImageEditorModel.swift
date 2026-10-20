@@ -293,7 +293,7 @@ final class ImageEditorModel: ObservableObject {
 
     func resetCrop() { mutate("Reset Crop") { $0.cropRect = CGRect(origin: .zero, size: $0.sourceSize) } }
 
-    func addImage(url: URL, at point: CGPoint? = nil, beside: Bool = false) {
+    func addImage(url: URL, at point: CGPoint? = nil, beside: Bool = false, ownsTemporary: Bool = false) {
         Task {
             do {
                 let image = try await Task.detached(priority: .userInitiated) { try ImageProject.readImage(url) }.value
@@ -322,9 +322,14 @@ final class ImageEditorModel: ObservableObject {
                     $0.annotations.append(annotation)
                     $0.cropRect = $0.cropRect.union(annotation.rect).integral
                 }
+                guard self.document?.annotations.contains(where: { $0.id == annotation.id }) == true else {
+                    insertedImages.removeValue(forKey: id)
+                    return
+                }
                 selectedIDs = [annotation.id]
                 tool = .select
                 canvas?.fitToWindow()
+                if ownsTemporary { try ImageFile.removeTemporary(url) }
             } catch { errorMessage = error.localizedDescription }
         }
     }
@@ -451,19 +456,22 @@ final class ImageEditorModel: ObservableObject {
     }
 
     func copyImage() {
-        guard !busy else { return }
+        guard !busy, !isClosed else { return }
         canvas?.commitEditing()
+        let pasteboard = NSPasteboard.general
+        let changeCount = pasteboard.changeCount
+        busy = true
+        status = "Copying…"
         Task {
+            defer { busy = false; status = "" }
             do {
                 let contents = try snapshot()
-                busy = true
-                status = "Copying…"
-                defer { busy = false; status = "" }
                 let data = try await Task.detached(priority: .userInitiated) {
                     try Self.pngData(ImageRenderer.render(contents))
                 }.value
-                NSPasteboard.general.clearContents()
-                guard NSPasteboard.general.setData(data, forType: .png) else {
+                guard !Task.isCancelled, !isClosed, pasteboard.changeCount == changeCount else { return }
+                pasteboard.clearContents()
+                guard pasteboard.setData(data, forType: .png) else {
                     throw CliptError.message("The image couldn’t be copied.")
                 }
             } catch { errorMessage = error.localizedDescription }
@@ -484,8 +492,10 @@ final class ImageEditorModel: ObservableObject {
 
     func copySelection(cut: Bool = false) {
         guard !selectedAnnotations.isEmpty else { copyImage(); return }
-        guard !busy else { return }
+        guard !busy, !isClosed else { return }
         let snapshot = ImageClipboardContents(annotations: selectedAnnotations, images: insertedImages)
+        let pasteboard = NSPasteboard.general
+        let changeCount = pasteboard.changeCount
         busy = true
         Task {
             defer { busy = false }
@@ -497,8 +507,9 @@ final class ImageEditorModel: ObservableObject {
                     }
                     return try JSONEncoder().encode(ImageAnnotationClipboard(annotations: snapshot.annotations, images: images))
                 }.value
-                NSPasteboard.general.clearContents()
-                guard NSPasteboard.general.setData(data, forType: Self.annotationsPasteboardType) else {
+                guard !Task.isCancelled, !isClosed, pasteboard.changeCount == changeCount else { return }
+                pasteboard.clearContents()
+                guard pasteboard.setData(data, forType: Self.annotationsPasteboardType) else {
                     throw CliptError.message("The selection couldn’t be copied.")
                 }
                 if cut {
@@ -560,7 +571,7 @@ final class ImageEditorModel: ObservableObject {
             Task {
                 do {
                     try await Task.detached(priority: .userInitiated) { try data.write(to: url, options: .atomic) }.value
-                    addImage(url: url)
+                    addImage(url: url, ownsTemporary: true)
                 } catch { errorMessage = error.localizedDescription }
             }
         }
