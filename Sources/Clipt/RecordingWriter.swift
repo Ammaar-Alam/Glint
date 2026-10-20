@@ -201,23 +201,58 @@ final class RecordingWriter: NSObject, SCStreamOutput, SCStreamDelegate, AVCaptu
     private func appendAudio(_ sample: CMSampleBuffer, to input: AVAssetWriterInput) {
         guard let format = sample.formatDescription,
               let description = CMAudioFormatDescriptionGetStreamBasicDescription(format)?.pointee,
+              description.mFormatID == kAudioFormatLinearPCM, description.mSampleRate.isFinite,
               description.mSampleRate > 0 else { fail(CliptError.message("The recording received an unsupported audio format.")); return }
         let rate = description.mSampleRate
         let count = sample.numSamples
         let start = sample.presentationTimeStamp.seconds
         for range in timeline.activeRanges(from: start, to: start + Double(count) / rate) {
-            let first = max(0, min(count, Int(ceil((range.lowerBound - start) * rate - 0.00001))))
-            let last = max(first, min(count, Int(floor((range.upperBound - start) * rate + 0.00001))))
-            guard last > first, let time = timeline.presentationTime(for: start + Double(first) / rate) else { continue }
-            if first == 0, last == count { append(sample, time: time, to: input, video: false) }
+            let frames = Self.audioFrameRange(range, sampleStart: start, frameCount: count, rate: rate)
+            guard !frames.isEmpty else { continue }
+            let time = timeline.elapsed(at: start + Double(frames.lowerBound) / rate)
+            if frames.count == count { append(sample, time: time, to: input, video: false) }
             else {
-                var trimmed: CMSampleBuffer?
-                guard CMSampleBufferCopySampleBufferForRange(allocator: kCFAllocatorDefault, sampleBuffer: sample,
-                    sampleRange: CFRange(location: first, length: last - first), sampleBufferOut: &trimmed) == noErr,
-                      let trimmed else { fail(CliptError.message("The audio couldn’t be trimmed at a pause boundary.")); return }
-                append(trimmed, time: time, to: input, video: false)
+                do { append(try Self.trimAudio(sample, frames: frames), time: time, to: input, video: false) }
+                catch { fail(error); return }
             }
         }
+    }
+
+    static func audioFrameRange(_ range: Range<Double>, sampleStart: Double, frameCount: Int, rate: Double) -> Range<Int> {
+        let tolerance = max(0.00001, max(sampleStart.ulp, max(range.lowerBound.ulp, range.upperBound.ulp)) * rate * 2)
+        let first = range.lowerBound <= sampleStart ? 0 : max(0, min(frameCount, Int(ceil((range.lowerBound - sampleStart) * rate - tolerance))))
+        let last = range.upperBound >= sampleStart + Double(frameCount) / rate ? frameCount : max(first, min(frameCount, Int(floor((range.upperBound - sampleStart) * rate + tolerance))))
+        return first..<last
+    }
+
+    static func trimAudio(_ sample: CMSampleBuffer, frames: Range<Int>) throws -> CMSampleBuffer {
+        guard frames.lowerBound >= 0, frames.upperBound <= sample.numSamples, !frames.isEmpty,
+              frames.lowerBound <= Int32.max, frames.count <= Int32.max,
+              let description = sample.formatDescription,
+              let asbd = CMAudioFormatDescriptionGetStreamBasicDescription(description),
+              asbd.pointee.mFormatID == kAudioFormatLinearPCM,
+              let format = AVAudioFormat(streamDescription: asbd),
+              let pcm = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: AVAudioFrameCount(frames.count)) else {
+            throw CliptError.message("The recording received an invalid audio frame range or format.")
+        }
+        pcm.frameLength = pcm.frameCapacity
+        // PCM may be planar and omit the sample sizes required by generic range copying
+        var status = CMSampleBufferCopyPCMDataIntoAudioBufferList(sample, at: Int32(frames.lowerBound), frameCount: Int32(frames.count), into: pcm.mutableAudioBufferList)
+        guard status == noErr else { throw CliptError.message("The audio samples couldn’t be copied (CoreMedia \(status)).") }
+        var timing = CMSampleTimingInfo()
+        status = CMSampleBufferGetSampleTimingInfo(sample, at: frames.lowerBound, timingInfoOut: &timing)
+        guard status == noErr else { throw CliptError.message("The audio timestamp couldn’t be read (CoreMedia \(status)).") }
+        var trimmed: CMSampleBuffer?
+        status = CMSampleBufferCreate(allocator: kCFAllocatorDefault, dataBuffer: nil, dataReady: false, makeDataReadyCallback: nil,
+            refcon: nil, formatDescription: description, sampleCount: frames.count, sampleTimingEntryCount: 1, sampleTimingArray: &timing,
+            sampleSizeEntryCount: 0, sampleSizeArray: nil, sampleBufferOut: &trimmed)
+        guard status == noErr, let trimmed else { throw CliptError.message("The trimmed audio couldn’t be prepared (CoreMedia \(status)).") }
+        status = CMSampleBufferSetDataBufferFromAudioBufferList(trimmed, blockBufferAllocator: kCFAllocatorDefault,
+            blockBufferMemoryAllocator: kCFAllocatorDefault, flags: 0, bufferList: pcm.audioBufferList)
+        guard status == noErr else { throw CliptError.message("The trimmed audio couldn’t be stored (CoreMedia \(status)).") }
+        status = CMSampleBufferSetDataReady(trimmed)
+        guard status == noErr else { throw CliptError.message("The trimmed audio couldn’t be made ready (CoreMedia \(status)).") }
+        return trimmed
     }
 
     private func append(_ sample: CMSampleBuffer, time: Double, to input: AVAssetWriterInput, video: Bool) {
