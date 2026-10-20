@@ -31,7 +31,6 @@ struct CaptureItem: Codable, Identifiable, Equatable, Sendable {
     var filename: String
     var kind: CaptureKind
     var modifiedAt: Date? = nil
-    var sourceURL: URL? = nil
 
     func directory(in root: URL) -> URL { root.appendingPathComponent(id.uuidString, isDirectory: true) }
     func url(in root: URL) -> URL { directory(in: root).appendingPathComponent(filename) }
@@ -67,12 +66,11 @@ actor CaptureStorage {
             .sorted { $0.createdAt > $1.createdAt }
     }
 
-    func ingest(_ source: URL, title: String, replacing existing: CaptureItem? = nil) async throws -> CaptureItem {
+    func ingest(_ source: URL, title: String) async throws -> CaptureItem {
         guard source.isFileURL else { throw CliptError.message("Only local files can be opened.") }
         let kind = try CaptureKind.identify(source)
-        let item = CaptureItem(id: existing?.id ?? UUID(), createdAt: existing?.createdAt ?? Date(), title: existing?.title ?? title,
-                               filename: "capture." + source.pathExtension.lowercased(), kind: kind,
-                               modifiedAt: existing == nil ? nil : Date(), sourceURL: source.standardizedFileURL)
+        let item = CaptureItem(id: UUID(), createdAt: Date(), title: title,
+                               filename: "capture." + source.pathExtension.lowercased(), kind: kind)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         let staging = root.appendingPathComponent(".\(UUID().uuidString).pending", isDirectory: true)
         try FileManager.default.createDirectory(at: staging, withIntermediateDirectories: false)
@@ -82,8 +80,7 @@ actor CaptureStorage {
             let thumbnail = try await makeThumbnail(asset, kind: kind, directory: staging)
             try ImageFile.write(thumbnail, to: staging.appendingPathComponent("thumbnail.png"))
             try JSONEncoder().encode(item).write(to: staging.appendingPathComponent("item.json"), options: .atomic)
-            if existing != nil { _ = try FileManager.default.replaceItemAt(item.directory(in: root), withItemAt: staging) }
-            else { try FileManager.default.moveItem(at: staging, to: item.directory(in: root)) }
+            try FileManager.default.moveItem(at: staging, to: item.directory(in: root))
             return item
         } catch {
             try? FileManager.default.removeItem(at: staging)
@@ -161,11 +158,6 @@ final class CaptureLibrary {
     func ingest(_ url: URL, title: String? = nil) async throws -> CaptureItem {
         if let existing = items.first(where: { $0.url(in: root).standardizedFileURL == url.standardizedFileURL }) {
             let refreshed = try await storage.refresh(existing)
-            if let index = items.firstIndex(where: { $0.id == existing.id }) { items[index] = refreshed }
-            return refreshed
-        }
-        if let existing = items.first(where: { $0.sourceURL == url.standardizedFileURL }) {
-            let refreshed = try await storage.ingest(url, title: existing.title, replacing: existing)
             if let index = items.firstIndex(where: { $0.id == existing.id }) { items[index] = refreshed }
             return refreshed
         }

@@ -70,6 +70,20 @@ final class LibraryTests: XCTestCase {
         XCTAssertFalse(invalid.hasSafeFilename)
     }
 
+    func testTemporaryCleanupOnlyRemovesOwnedFiles() throws {
+        let owned = ImageFile.temporaryURL()
+        let outside = FileManager.default.temporaryDirectory.appendingPathComponent("Clipt-cleanup-test-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: outside, withIntermediateDirectories: true)
+        let imported = outside.appendingPathComponent(owned.lastPathComponent)
+        try Data("owned".utf8).write(to: owned)
+        try Data("imported".utf8).write(to: imported)
+        defer { try? FileManager.default.removeItem(at: owned); try? FileManager.default.removeItem(at: outside) }
+        try ImageFile.removeTemporary(imported)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: imported.path))
+        try ImageFile.removeTemporary(owned)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: owned.path))
+    }
+
     @MainActor
     func testProjectsShareFullResolutionFlattenedImagesAndRefreshWithoutDuplicating() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("Clipt-share-test-\(UUID().uuidString)")
@@ -108,6 +122,12 @@ final class LibraryTests: XCTestCase {
         XCTAssertEqual(refreshed.id, item.id)
         XCTAssertNotNil(refreshed.modifiedAt)
         XCTAssertEqual(try ImageFile.read(share).height, 3200)
+        let reopened = try await library.ingest(projectURL)
+        XCTAssertNotEqual(reopened.id, item.id)
+        XCTAssertEqual(library.items.count, 2)
+        XCTAssertEqual(try ImageFile.read(share).height, 3200)
+        XCTAssertEqual(try ImageProject.load(item.url(in: library.root)).document.quarterTurns, 1)
+        XCTAssertEqual(try ImageProject.load(reopened.url(in: library.root)).document.quarterTurns, 0)
         var video = item
         video.kind = .videoProject
         XCTAssertNil(video.shareURL(in: library.root))
