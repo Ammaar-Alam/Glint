@@ -51,8 +51,9 @@ enum VideoGeometry {
         guard current.visible, smoothing > 0 else { return current }
         let interval = min(1, smoothing) * 0.12
         let neighbors = [-1.0, -0.5, 0, 0.5, 1].map { sample(time + interval * $0) }.filter(\.visible)
-        return .init(time: time, position: .init(x: neighbors.map(\.position.x).reduce(0, +) / Double(neighbors.count),
-                                                y: neighbors.map(\.position.y).reduce(0, +) / Double(neighbors.count)))
+        let x = neighbors.map { $0.position.x }.reduce(0.0, +) / Double(neighbors.count)
+        let y = neighbors.map { $0.position.y }.reduce(0.0, +) / Double(neighbors.count)
+        return VideoCursorSample(time: time, position: VideoPoint(x: x, y: y))
     }
 
     static func zoom(at time: Double, project: VideoProject) -> (scale: Double, center: VideoPoint) {
