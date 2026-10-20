@@ -3,6 +3,26 @@ import CoreGraphics
 @testable import Clipt
 
 final class LibraryTests: XCTestCase {
+    func testVideoProjectImportPublishesAfterComposedThumbnail() async throws {
+        let root = try VideoTests.directory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let source = root.appendingPathComponent("source.cliptvideo", isDirectory: false)
+        try FileManager.default.createDirectory(at: source, withIntermediateDirectories: false)
+        try await VideoTests.movie(at: source.appendingPathComponent("screen.mov"))
+        var project = VideoProject(duration: 1, width: 96, height: 64, frameRate: 10)
+        project.edits.maximumDimension = 320
+        try project.save(to: source)
+        let library = root.appendingPathComponent("library", isDirectory: true)
+        let storage = CaptureStorage(root: library)
+        let item = try await storage.ingest(source, title: "Recording")
+        XCTAssertEqual(item.kind, .videoProject)
+        let items = try await storage.load()
+        XCTAssertEqual(items.map(\.id), [item.id])
+        XCTAssertEqual(try ImageFile.read(item.thumbnail(in: library)).width, 320)
+        XCTAssertEqual(try VideoProject.load(from: item.url(in: library)), project)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: source.appendingPathComponent("screen.mov").path))
+    }
+
     func testCapturePersistsBeforeBecomingVisibleAndBadInputDoesNotCreateItem() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("Clipt-library-test-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)

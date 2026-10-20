@@ -256,7 +256,7 @@ struct VideoProject: Codable, Equatable, Sendable {
         for file in [project.screenFile, project.cameraFile].compactMap({ $0 }) + project.backgroundFiles {
             let url = directory.appendingPathComponent(file)
             let resolved = url.resolvingSymlinksInPath().standardizedFileURL
-            guard resolved.deletingLastPathComponent() == directory.resolvingSymlinksInPath().standardizedFileURL else {
+            guard resolved.deletingLastPathComponent().path == directory.resolvingSymlinksInPath().standardizedFileURL.path else {
                 throw CliptError.message("This project references a file outside its folder.")
             }
         }
