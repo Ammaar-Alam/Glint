@@ -14,6 +14,8 @@ open build/Glint.app
 
 Set `GLINT_SIGNING_IDENTITY` to a certificate's SHA-1 hash to keep permissions between builds. Otherwise the app is ad-hoc signed.
 
+`scripts/release.sh` builds a signed, notarized DMG. It needs a Developer ID Application certificate and a `notarytool` keychain profile named `glint-notary`.
+
 Tests use generated media and need no permissions. Check capture, recording and window behavior in the running app too.
 
 ## Guidelines
