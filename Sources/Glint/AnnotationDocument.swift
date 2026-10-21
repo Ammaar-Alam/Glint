@@ -124,6 +124,27 @@ struct ImageAnnotation: Codable, Equatable, Identifiable, Sendable {
                       height: max(1, (y.max() ?? 0) - (y.min() ?? 0)))
     }
 
+    // strokes count where they are drawn, not across their whole bounding box
+    func hitTest(_ point: CGPoint, tolerance: CGFloat) -> Bool {
+        guard [.pen, .line, .arrow, .curvedArrow].contains(tool), let start = points.first, let end = points.last, points.count >= 2 else {
+            return bounds.insetBy(dx: -tolerance, dy: -tolerance).contains(point)
+        }
+        var path = points
+        if tool == .curvedArrow {
+            let control = points.count > 2 ? points[1] : CGPoint(x: end.x, y: start.y)
+            path = (0...24).map { step in
+                let t = CGFloat(step) / 24, u = 1 - t
+                return CGPoint(x: u * u * start.x + 2 * u * t * control.x + t * t * end.x, y: u * u * start.y + 2 * u * t * control.y + t * t * end.y)
+            }
+        }
+        let reach = tolerance + lineWidth / 2
+        return zip(path, path.dropFirst()).contains { a, b in
+            let dx = b.x - a.x, dy = b.y - a.y, length = dx * dx + dy * dy
+            let t = length == 0 ? 0 : max(0, min(1, ((point.x - a.x) * dx + (point.y - a.y) * dy) / length))
+            return hypot(point.x - (a.x + t * dx), point.y - (a.y + t * dy)) <= reach
+        }
+    }
+
     mutating func move(dx: CGFloat, dy: CGFloat) {
         rect = rect.offsetBy(dx: dx, dy: dy)
         points = points.map { CGPoint(x: $0.x + dx, y: $0.y + dy) }
