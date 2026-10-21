@@ -114,6 +114,7 @@ final class SelectionController {
             controller.mode = controller.bar.options.mode.captureMode
         }
         controller.frozenFrames = frozenFrames
+        controller.bar.timerApplies = frozenFrames.isEmpty
         controller.showsLoupe = showsLoupe
         controller.snapshots = snapshots
         controller.configureCandidates(windows)
@@ -351,6 +352,7 @@ final class SelectionController {
     }
 
     private func captureSelection() {
+        bar.commitSize()
         let target: CaptureSelection
         if isWindowSelection, let selectedWindow { target = .window(selectedWindow) }
         else if !isWindowSelection, let selection, selection.width >= 2, selection.height >= 2 {
@@ -744,6 +746,12 @@ final class CaptureBarModel {
     var options = RecordingOptions.saved()
     var size: CGSize?
     var ratio = 0
+    var widthText = ""
+    var heightText = ""
+    // a frozen screen already ran its countdown before the bar opened
+    var timerApplies = true
+    // the field being typed in, applied on Return or before capturing
+    @ObservationIgnored var editedWidth: Bool?
     @ObservationIgnored var onMode: (CaptureMode) -> Void = { _ in }
     @ObservationIgnored var onRecording: (Bool) -> Void = { _ in }
     @ObservationIgnored var onSize: (CGSize, Bool) -> Void = { _, _ in }
@@ -759,6 +767,12 @@ final class CaptureBarModel {
     }
 
     var editsSize: Bool { mode != .window && mode != .fullScreen }
+
+    func commitSize() {
+        guard let editedWidth else { return }
+        self.editedWidth = nil
+        onSize(CGSize(width: Double(widthText) ?? 0, height: Double(heightText) ?? 0), editedWidth)
+    }
 }
 
 struct CaptureBar: View {
@@ -790,7 +804,7 @@ struct CaptureBar: View {
             if model.allInOne {
                 BarDivider()
                 if model.recording { timer($model.options.countdown, help: "Countdown") }
-                else { timer($delay, help: "Timer") }
+                else if model.timerApplies { timer($delay, help: "Timer") }
             }
             if model.recording {
                 BarDivider()
@@ -845,8 +859,6 @@ struct CaptureBar: View {
 
 private struct SelectionSizeFields: View {
     @Bindable var model: CaptureBarModel
-    @State private var width = ""
-    @State private var height = ""
     @FocusState private var focused: Field?
 
     private enum Field { case width, height }
@@ -854,9 +866,9 @@ private struct SelectionSizeFields: View {
     var body: some View {
         HStack(spacing: 4) {
             if model.editsSize {
-                field($width, .width, label: "Width")
+                field($model.widthText, .width, label: "Width")
                 Text("×").font(.system(size: 11)).foregroundStyle(.secondary)
-                field($height, .height, label: "Height")
+                field($model.heightText, .height, label: "Height")
                 MenuButton(help: "Aspect ratio", width: 52, items: {
                     CaptureBarModel.ratios.enumerated().map { index, ratio in
                         let item = HandlerMenuItem(ratio.0) { model.onRatio(index) }
@@ -890,9 +902,10 @@ private struct SelectionSizeFields: View {
             .overlay(RoundedRectangle(cornerRadius: Radius.control - 1, style: .continuous)
                 .strokeBorder(focused == field ? Color.glint : .clear))
             .focused($focused, equals: field)
+            .onChange(of: text.wrappedValue) { if focused == field { model.editedWidth = field == .width } }
             .onSubmit {
                 focused = nil
-                model.onSize(CGSize(width: Double(width) ?? 0, height: Double(height) ?? 0), field == .width)
+                model.commitSize()
                 sync()
                 model.onEditingEnd()
             }
@@ -901,7 +914,7 @@ private struct SelectionSizeFields: View {
 
     private func sync() {
         guard focused == nil else { return }
-        width = model.size.map { String(Int($0.width)) } ?? ""
-        height = model.size.map { String(Int($0.height)) } ?? ""
+        model.widthText = model.size.map { String(Int($0.width)) } ?? ""
+        model.heightText = model.size.map { String(Int($0.height)) } ?? ""
     }
 }
