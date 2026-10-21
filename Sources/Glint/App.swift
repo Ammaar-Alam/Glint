@@ -402,6 +402,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                     return folder.appendingPathComponent(item.title + ".mp4")
                 }()
                 let project = try VideoProject.load(from: directory)
+                defer { CaptureFolder.release(destination) }
                 try await VideoExporter.export(project: project, directory: directory, destination: destination, format: .mp4) { _ in }
                 if let request { clipboard.commit(request) { _ = $0.writeObjects([destination as NSURL]) } }
             } catch { showError(error) }
@@ -515,18 +516,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     func save(_ item: CaptureItem) {
         if item.kind == .videoProject { edit(item); return }
         guard let source = item.shareURL(in: library.root) else { return }
+        let format = item.kind.isVideo ? nil : ScreenshotFormat.current
+        let type = format?.type ?? UTType(filenameExtension: source.pathExtension) ?? .data
         let panel = NSSavePanel()
-        panel.nameFieldStringValue = item.title + "." + source.pathExtension
+        panel.nameFieldStringValue = item.title + "." + (type.preferredFilenameExtension ?? source.pathExtension)
         panel.canCreateDirectories = true
-        panel.allowedContentTypes = [UTType(filenameExtension: source.pathExtension) ?? .data]
+        panel.allowedContentTypes = [type]
         NSApp.activate(ignoringOtherApps: true)
         panel.begin { response in
             guard response == .OK, let destination = panel.url else { return }
             self.pendingWrites += 1
             Task {
                 defer { self.pendingWrites -= 1 }
-                do { try await Task.detached { try ExportFile.copy(source, to: destination) }.value }
-                catch { showError(error) }
+                do {
+                    try await Task.detached {
+                        if let format { try CaptureFolder.writeImage(source, format: format, to: destination) }
+                        else { try ExportFile.copy(source, to: destination) }
+                    }.value
+                } catch { showError(error) }
             }
         }
     }
