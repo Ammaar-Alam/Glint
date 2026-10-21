@@ -77,5 +77,11 @@ final class HistoryTests: XCTestCase {
         try Data().write(to: target)
         try Data().write(to: folder.appendingPathComponent("Shot 2.png"))
         XCTAssertEqual(ExportFile.available(target).lastPathComponent, "Shot 3.png")
+        let first = ExportFile.reserve(target), second = ExportFile.reserve(target)
+        XCTAssertEqual([first.lastPathComponent, second.lastPathComponent], ["Shot 3.png", "Shot 4.png"])
+        ExportFile.release(first)
+        ExportFile.release(second)
+        XCTAssertEqual(ExportFile.reserve(target).lastPathComponent, "Shot 3.png")
+        ExportFile.release(folder.appendingPathComponent("Shot 3.png"))
     }
 }
