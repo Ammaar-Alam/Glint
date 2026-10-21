@@ -22,15 +22,16 @@ final class ImageEditorWindowController: NSWindowController, NSWindowDelegate, E
         // an empty unified toolbar gives the title bar the height of the editor's top bar
         window.toolbar = NSToolbar(identifier: "ImageEditor")
         window.toolbarStyle = .unified
-        window.minSize = NSSize(width: 1000, height: 620)
+        window.minSize = NSSize(width: 1100, height: 620)
         window.isReleasedWhenClosed = false
         window.tabbingMode = .disallowed
         super.init(window: window)
         window.delegate = self
-        window.contentViewController = NSHostingController(rootView: ImageEditorView(model: model,
-            export: { [weak self] in self?.exportImage() }, save: { [weak self] in self?.saveProject() },
+        window.contentViewController = NSHostingController(rootView: ImageEditorView(model: model, actions: EditorActions(
+            export: { [weak self] in self?.exportImage() }, saveProject: { [weak self] in self?.saveProject() },
             printImage: { [weak self] in self?.printImage() }, pin: { [weak self] in self?.pinImage() },
-            capture: { [weak self] in self?.captureImage() }))
+            capture: { [weak self] in self?.captureImage() }, done: { [weak self] in self?.finishEditing() },
+            share: { [weak self] in self?.share() }, flatten: { [weak self] in await self?.flattenedFile() })))
         model.onSaveProject = { [weak self] in self?.saveProject() }
         window.center()
     }
@@ -123,18 +124,55 @@ final class ImageEditorWindowController: NSWindowController, NSWindowDelegate, E
 
     private func pinImage() {
         guard !model.busy, let onPin else { return }
+        Task { if let url = await flattenedFile() { onPin(url) } }
+    }
+
+    // the edited image as a png named after the capture, for pin, share and drag
+    func flattenedFile() async -> URL? {
+        guard !model.busy, model.document != nil else { return nil }
         model.canvas?.commitEditing()
+        do {
+            let contents = try model.snapshot()
+            let name = model.inputURL.deletingPathExtension().lastPathComponent
+            model.busy = true
+            defer { model.busy = false }
+            return try await Task.detached(priority: .userInitiated) {
+                let folder = FileManager.default.temporaryDirectory.appendingPathComponent("Glint-\(UUID().uuidString)", isDirectory: true)
+                try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+                let url = folder.appendingPathComponent(name).appendingPathExtension("png")
+                try ImageFile.write(ImageRenderer.render(contents), to: url)
+                return url
+            }.value
+        } catch {
+            model.errorMessage = error.localizedDescription
+            return nil
+        }
+    }
+
+    private func share() {
+        guard let view = window?.contentView else { return }
+        Task {
+            guard let url = await flattenedFile() else { return }
+            let anchor = NSRect(x: view.bounds.maxX - 150, y: view.isFlipped ? view.bounds.maxY - 36 : 8, width: 28, height: 28)
+            NSSharingServicePicker(items: [url]).show(relativeTo: anchor, of: view, preferredEdge: view.isFlipped ? .minY : .maxY)
+        }
+    }
+
+    // saves edits back to the capture, a plain screenshot gets an edited copy so the original stays intact
+    func finishEditing() {
+        guard !model.busy, model.document != nil else { return }
+        model.canvas?.commitEditing()
+        guard model.hasUnsavedChanges else { close(); return }
         Task {
             do {
-                let contents = try model.snapshot()
-                model.busy = true
-                defer { model.busy = false }
-                let url = try await Task.detached(priority: .userInitiated) {
-                    let url = ImageFile.temporaryURL()
-                    try ImageFile.write(ImageRenderer.render(contents), to: url)
-                    return url
-                }.value
-                onPin(url)
+                let destination = try model.projectURL ?? {
+                    let folder = FileManager.default.temporaryDirectory.appendingPathComponent("Glint-\(UUID().uuidString)", isDirectory: true)
+                    try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+                    return folder.appendingPathComponent(model.inputURL.deletingPathExtension().lastPathComponent).appendingPathExtension("glint")
+                }()
+                try await model.saveProject(to: destination)
+                closingAfterSave = true
+                close()
             } catch { model.errorMessage = error.localizedDescription }
         }
     }
@@ -223,19 +261,45 @@ private enum ImageSizePopover: String, Identifiable {
     var id: String { rawValue }
 }
 
-private struct ImageEditorView: View {
-    @ObservedObject var model: ImageEditorModel
+struct EditorActions {
     let export: () -> Void
-    let save: () -> Void
+    let saveProject: () -> Void
     let printImage: () -> Void
     let pin: () -> Void
     let capture: () -> Void
-    @State private var sizePopover: ImageSizePopover?
+    let done: () -> Void
+    let share: () -> Void
+    let flatten: () async -> URL?
+}
 
-    private static let toolGroups: [[AnnotationTool]] = [
-        [.select], [.arrow, .curvedArrow, .line, .rectangle, .ellipse, .pen],
-        [.text, .counter, .highlight], [.spotlight, .pixelate, .blur, .redact], [.crop, .image]
+extension AnnotationColor {
+    static let palette: [AnnotationColor] = [
+        .coral, AnnotationColor(red: 1, green: 0.58, blue: 0.1), AnnotationColor(red: 1, green: 0.82, blue: 0.1),
+        AnnotationColor(red: 0.2, green: 0.78, blue: 0.35), AnnotationColor(red: 0.13, green: 0.82, blue: 0.92),
+        AnnotationColor(red: 0.2, green: 0.45, blue: 1), AnnotationColor(red: 0.62, green: 0.35, blue: 0.95), .white, .ink
     ]
+    static let paletteNames = ["Red", "Orange", "Yellow", "Green", "Cyan", "Blue", "Purple", "White", "Black"]
+}
+
+private enum EditorTools {
+    static let color: Set<AnnotationTool> = [.arrow, .curvedArrow, .line, .rectangle, .ellipse, .pen, .text, .counter, .highlight, .redact]
+    static let stroke: Set<AnnotationTool> = [.arrow, .curvedArrow, .line, .rectangle, .ellipse, .pen]
+    static let redact: Set<AnnotationTool> = [.blur, .pixelate, .redact]
+    static let arrows: Set<AnnotationTool> = [.arrow, .curvedArrow]
+    // tools without their own strip button share one with a remembered variant
+    static let strip: [AnnotationTool] = [.select, .arrow, .rectangle, .ellipse, .line, .pen, .text, .counter, .highlight, .spotlight, .pixelate]
+
+    @MainActor static func active(_ model: ImageEditorModel) -> Set<AnnotationTool> {
+        model.selectedIDs.isEmpty ? [model.tool] : Set(model.selectedAnnotations.map(\.tool))
+    }
+}
+
+private struct ImageEditorView: View {
+    @ObservedObject var model: ImageEditorModel
+    let actions: EditorActions
+    @State private var sizePopover: ImageSizePopover?
+    @AppStorage("redactTool") private var redactTool = AnnotationTool.pixelate.rawValue
+    @AppStorage("arrowTool") private var arrowTool = AnnotationTool.arrow.rawValue
 
     var body: some View {
         VStack(spacing: 0) {
@@ -246,80 +310,138 @@ private struct ImageEditorView: View {
                     ImageCanvas(model: model)
                     if model.document == nil, model.errorMessage == nil { ProgressView().controlSize(.large) }
                 }
-                .overlay(alignment: .top) {
-                    if model.document != nil, ToolOptions.isVisible(for: model) {
-                        ToolOptions(model: model).padding(.top, 14).transition(.opacity.combined(with: .offset(y: -6)))
-                    }
-                }
-                .overlay(alignment: .bottomLeading) { info.padding(14) }
-                .overlay(alignment: .bottomTrailing) { zoomControls.padding(14) }
+                .overlay(alignment: .leading) { ColorColumn(model: model).padding(.leading, 14) }
                 if model.showsBackgroundPanel {
                     Divider()
                     BackgroundPanel(model: model).frame(width: 280).transition(.move(edge: .trailing))
                 }
             }
+            Divider()
+            bottomBar
         }
         .ignoresSafeArea(.container, edges: .top)
         .animation(.easeOut(duration: 0.18), value: model.showsBackgroundPanel)
-        .animation(.easeOut(duration: 0.15), value: ToolOptions.isVisible(for: model))
         .alert("Couldn’t finish", isPresented: Binding(get: { model.errorMessage != nil }, set: { if !$0 { model.errorMessage = nil } })) {
             Button("OK") { model.errorMessage = nil }
         } message: { Text(model.errorMessage ?? "") }
     }
 
     private var topBar: some View {
-        HStack(spacing: 6) {
+        HStack(spacing: 8) {
             // room for the window controls
             Color.clear.frame(width: 64, height: 1)
-            Button { model.undoManager.undo() } label: { Image(systemName: "arrow.uturn.backward") }
-                .buttonStyle(ToolButtonStyle()).help("Undo").disabled(!model.undoManager.canUndo)
-            Button { model.undoManager.redo() } label: { Image(systemName: "arrow.uturn.forward") }
-                .buttonStyle(ToolButtonStyle()).help("Redo").disabled(!model.undoManager.canRedo)
-            Spacer(minLength: 12)
+            HStack(spacing: 4) {
+                Button { select(.crop) } label: { Image(systemName: "crop") }
+                    .buttonStyle(ToolButtonStyle(selected: model.tool == .crop, prominent: true)).help("Crop  C")
+                Button { model.importImage() } label: { Image(systemName: "photo.badge.plus") }
+                    .buttonStyle(ToolButtonStyle()).help("Add Image")
+                Button { model.showsBackgroundPanel.toggle() } label: { Image(systemName: "square.on.square.dashed") }
+                    .buttonStyle(ToolButtonStyle(selected: model.showsBackgroundPanel)).help("Background")
+            }
+            Spacer(minLength: 8)
             toolStrip
-            Spacer(minLength: 12)
-            Button { model.showsBackgroundPanel.toggle() } label: { Image(systemName: "square.on.square.dashed") }
-                .buttonStyle(ToolButtonStyle(selected: model.showsBackgroundPanel)).help("Background")
-            moreMenu
-            Button("Copy") { model.copyImage() }
+            InlineOptions(model: model)
+            Spacer(minLength: 8)
+            Button("Save As…", action: actions.export)
                 .buttonStyle(SecondaryButtonStyle())
-                .keyboardShortcut("c", modifiers: [.command, .shift])
-            Button("Export", action: export)
-                .buttonStyle(PrimaryButtonStyle())
                 .keyboardShortcut("e", modifiers: [.command])
+            Button("Done", action: actions.done)
+                .buttonStyle(PrimaryButtonStyle())
+                .keyboardShortcut(.return, modifiers: [.command])
         }
         .padding(.horizontal, 12)
         .frame(height: 52)
         .background(.bar)
-        // menu items ignore keyboard shortcuts, so a hidden button carries print
-        .background(Button("Print", action: printImage).keyboardShortcut("p", modifiers: .command).hidden())
+        // menu items ignore keyboard shortcuts, so hidden buttons carry them
+        .background(Group {
+            Button("Print", action: actions.printImage).keyboardShortcut("p", modifiers: .command)
+            Button("Copy", action: model.copyImage).keyboardShortcut("c", modifiers: [.command, .shift])
+        }.hidden())
         .gesture(WindowDragGesture())
         .disabled(model.document == nil || model.busy)
     }
 
     private var toolStrip: some View {
         HStack(spacing: 2) {
-            ForEach(Array(Self.toolGroups.enumerated()), id: \.offset) { index, group in
-                if index > 0 { Divider().frame(height: 16).padding(.horizontal, 3) }
-                ForEach(group) { tool in
-                    Button {
-                        if tool == .image { model.importImage() }
-                        else {
-                            if tool == .crop { model.select(nil) }
-                            model.tool = tool
-                            model.canvas?.window?.makeFirstResponder(model.canvas)
-                        }
-                    } label: { Image(systemName: tool.symbol) }
-                    .buttonStyle(ToolButtonStyle(selected: model.tool == tool))
-                    .help(tool.title + (tool.keyboardKey.map { "  \($0.uppercased())" } ?? ""))
-                    .accessibilityLabel(tool.title)
-                    .accessibilityAddTraits(model.tool == tool ? .isSelected : [])
-                }
+            ForEach(EditorTools.strip) { tool in
+                let shared = tool == .pixelate ? EditorTools.redact : tool == .arrow ? EditorTools.arrows : [tool]
+                let selected = shared.contains(model.tool)
+                Button {
+                    switch tool {
+                    case .pixelate: select(AnnotationTool(rawValue: redactTool) ?? .pixelate)
+                    case .arrow: select(AnnotationTool(rawValue: arrowTool) ?? .arrow)
+                    default: select(tool)
+                    }
+                } label: { Image(systemName: tool == .pixelate ? "eye.slash" : tool.symbol) }
+                .buttonStyle(ToolButtonStyle(selected: selected, size: CGSize(width: 32, height: 30), prominent: true))
+                .help(Self.help(tool))
+                .accessibilityLabel(tool == .pixelate ? "Redact" : tool.title)
+                .accessibilityAddTraits(selected ? .isSelected : [])
             }
         }
         .padding(3)
         .background(Color.primary.opacity(0.05), in: RoundedRectangle(cornerRadius: Radius.control + 3, style: .continuous))
         .fixedSize()
+    }
+
+    private static func help(_ tool: AnnotationTool) -> String {
+        if tool == .pixelate { return "Redact  B" }
+        return tool.title + (tool.keyboardKey.map { "  \($0.uppercased())" } ?? "")
+    }
+
+    private func select(_ tool: AnnotationTool) {
+        if tool == .crop { model.select(nil) }
+        model.tool = tool
+        model.canvas?.window?.makeFirstResponder(model.canvas)
+    }
+
+    private var bottomBar: some View {
+        HStack(spacing: 6) {
+            Button { model.undoManager.undo() } label: { Image(systemName: "arrow.uturn.backward") }
+                .buttonStyle(ToolButtonStyle()).help("Undo").disabled(!model.undoManager.canUndo)
+            Button { model.undoManager.redo() } label: { Image(systemName: "arrow.uturn.forward") }
+                .buttonStyle(ToolButtonStyle()).help("Redo").disabled(!model.undoManager.canRedo)
+            zoomMenu
+            if let size = model.document?.outputSize {
+                Text("\(Int(size.width)) × \(Int(size.height))")
+                    .font(.system(size: 11, weight: .medium).monospacedDigit())
+                    .foregroundStyle(.secondary)
+                    .padding(.leading, 4)
+            }
+            if model.busy { ProgressView().controlSize(.small) }
+            Spacer()
+            DragHandle(flatten: actions.flatten)
+            Spacer()
+            Button(action: actions.share) { Image(systemName: "square.and.arrow.up") }
+                .buttonStyle(ToolButtonStyle()).help("Share")
+            Button(action: actions.pin) { Image(systemName: "pin") }
+                .buttonStyle(ToolButtonStyle()).help("Pin").disabled(!model.canPin)
+            Button(action: model.copyImage) { Image(systemName: "doc.on.doc") }
+                .buttonStyle(ToolButtonStyle()).help("Copy  ⇧⌘C")
+            moreMenu
+        }
+        .padding(.horizontal, 12)
+        .frame(height: 44)
+        .background(.bar)
+        .disabled(model.document == nil)
+    }
+
+    private var zoomMenu: some View {
+        Menu {
+            Button("Fit") { model.canvas?.fitToWindow() }
+            ForEach([0.5, 1.0, 2.0], id: \.self) { level in
+                Button("\(Int(level * 100))%") { model.canvas?.setZoom(level) }
+            }
+            Divider()
+            Button("Zoom In") { model.canvas?.zoom(by: 1.25) }
+            Button("Zoom Out") { model.canvas?.zoom(by: 0.8) }
+        } label: {
+            Text(model.zoomLabel).font(.system(size: 12, weight: .semibold).monospacedDigit())
+        }
+        .menuStyle(.button)
+        .buttonStyle(ToolButtonStyle(size: CGSize(width: 58, height: 28)))
+        .fixedSize()
+        .help("Zoom")
     }
 
     private var moreMenu: some View {
@@ -332,14 +454,12 @@ private struct ImageEditorView: View {
                 Button("Canvas Size…") { sizePopover = .canvas }
             }
             Section {
-                Button("Insert Image…") { model.importImage() }
                 Button("Add Beside…") { model.importImage(beside: true) }
-                Button("Capture Into Image", action: capture).disabled(!model.canCapture)
+                Button("Capture Into Image", action: actions.capture).disabled(!model.canCapture)
             }
             Section {
-                Button("Pin", action: pin).disabled(!model.canPin)
-                Button("Print…", action: printImage)
-                Button("Save Project…", action: save)
+                Button("Save Project…", action: actions.saveProject)
+                Button("Print…", action: actions.printImage)
             }
         } label: { Image(systemName: "ellipsis") }
             .menuStyle(.button)
@@ -354,193 +474,210 @@ private struct ImageEditorView: View {
                 }
             }
     }
-
-    private var info: some View {
-        HStack(spacing: 8) {
-            if model.busy { ProgressView().controlSize(.mini) }
-            if let size = model.document?.outputSize {
-                Text("\(Int(size.width)) × \(Int(size.height))").monospacedDigit()
-            }
-            if !model.status.isEmpty { Text(model.status).lineLimit(1) }
-        }
-        .font(.system(size: 11, weight: .medium))
-        .foregroundStyle(.secondary)
-        .padding(.horizontal, 10)
-        .frame(height: 24)
-        .background(.regularMaterial, in: Capsule())
-        .opacity(model.document == nil ? 0 : 1)
-    }
-
-    private var zoomControls: some View {
-        Island {
-            Button { model.canvas?.zoom(by: 0.8) } label: { Image(systemName: "minus") }
-                .buttonStyle(ToolButtonStyle(size: CGSize(width: 26, height: 24))).help("Zoom Out")
-            Button(model.zoomLabel) { model.canvas?.actualSize() }
-                .buttonStyle(ToolButtonStyle(size: CGSize(width: 50, height: 24)))
-                .font(.system(size: 11, weight: .semibold).monospacedDigit())
-                .help("Actual Size")
-            Button { model.canvas?.zoom(by: 1.25) } label: { Image(systemName: "plus") }
-                .buttonStyle(ToolButtonStyle(size: CGSize(width: 26, height: 24))).help("Zoom In")
-            Button { model.canvas?.fitToWindow() } label: { Image(systemName: "arrow.up.left.and.down.right.magnifyingglass") }
-                .buttonStyle(ToolButtonStyle(size: CGSize(width: 26, height: 24))).help("Fit")
-        }
-        .opacity(model.document == nil ? 0 : 1)
-    }
 }
 
-// floating options for the active tool or the current selection
-private struct ToolOptions: View {
+// controls for the active tool, sitting right of the tool strip
+private struct InlineOptions: View {
     @ObservedObject var model: ImageEditorModel
-    @State private var showsStrokeSlider = false
 
-    static let palette: [AnnotationColor] = [
-        .coral, AnnotationColor(red: 1, green: 0.58, blue: 0.1), AnnotationColor(red: 1, green: 0.82, blue: 0.1),
-        AnnotationColor(red: 0.2, green: 0.78, blue: 0.35), AnnotationColor(red: 0.13, green: 0.89, blue: 0.96),
-        AnnotationColor(red: 0.2, green: 0.45, blue: 1), AnnotationColor(red: 0.62, green: 0.35, blue: 0.95), .white, .ink
-    ]
-    private static let colorTools: Set<AnnotationTool> = [.arrow, .curvedArrow, .line, .rectangle, .ellipse, .pen, .text, .counter, .highlight, .redact]
-    private static let strokeTools: Set<AnnotationTool> = [.arrow, .curvedArrow, .line, .rectangle, .ellipse, .pen]
-    private static let strokes: [Double] = [3, 5, 8, 14]
     private static let cropRatios: [(title: String, ratio: Double)] = [("Free", 0), ("1:1", 1), ("16:9", 16.0 / 9), ("9:16", 9.0 / 16), ("4:3", 4.0 / 3), ("3:2", 3.0 / 2)]
-
-    private var tools: Set<AnnotationTool> {
-        model.selectedIDs.isEmpty ? [model.tool] : Set(model.selectedAnnotations.map(\.tool))
-    }
-
-    private static let strengthTools: Set<AnnotationTool> = [.pixelate, .blur]
-
-    static func isVisible(for model: ImageEditorModel) -> Bool {
-        if model.tool == .crop || !model.selectedIDs.isEmpty { return true }
-        return colorTools.contains(model.tool) || strengthTools.contains(model.tool)
-    }
+    private static let redactModes: [(tool: AnnotationTool, title: String)] = [(.blur, "Blur"), (.pixelate, "Pixelate"), (.redact, "Solid")]
 
     var body: some View {
-        Island {
-            if model.tool == .crop { cropOptions } else {
-                if !tools.isDisjoint(with: Self.colorTools) { swatches }
-                if !tools.isDisjoint(with: Self.strokeTools) { separator; strokeOptions }
-                if !tools.isDisjoint(with: Self.strengthTools) { strengthOptions }
+        let tools = EditorTools.active(model)
+        HStack(spacing: 6) {
+            if model.tool == .crop {
+                cropOptions
+            } else {
+                if model.selectedIDs.isEmpty && EditorTools.arrows.contains(model.tool) { arrowStyle }
+                if model.selectedIDs.isEmpty && EditorTools.redact.contains(model.tool) { redactMode }
+                if !tools.isDisjoint(with: EditorTools.stroke) { slider(icon: "lineweight", help: "Stroke") }
+                if !tools.isDisjoint(with: [.blur, .pixelate]) { slider(icon: "drop.halffull", help: "Strength") }
                 if !tools.isDisjoint(with: [.rectangle, .ellipse]) {
                     Button { setFilled(!model.filled) } label: { Image(systemName: model.filled ? "square.fill" : "square") }
                         .buttonStyle(ToolButtonStyle(selected: model.filled)).help("Fill")
                 }
-                if !tools.isDisjoint(with: [.text, .counter]) { separator; textOptions }
+                if !tools.isDisjoint(with: [.text, .counter]) { sizeStepper }
+                if tools.contains(.text) {
+                    Button { model.bold.toggle(); let value = model.bold; model.changeStyle { $0.bold = value } } label: { Image(systemName: "bold") }
+                        .buttonStyle(ToolButtonStyle(selected: model.bold)).help("Bold")
+                    Button { model.italic.toggle(); let value = model.italic; model.changeStyle { $0.italic = value } } label: { Image(systemName: "italic") }
+                        .buttonStyle(ToolButtonStyle(selected: model.italic)).help("Italic")
+                }
                 if model.tool == .highlight && model.selectedIDs.isEmpty {
-                    separator
                     Button { model.smartHighlight.toggle() } label: { Image(systemName: "text.alignleft") }
                         .buttonStyle(ToolButtonStyle(selected: model.smartHighlight)).help("Snap to Text")
                 }
-                if !model.selectedIDs.isEmpty { separator; selectionActions }
+                if !model.selectedIDs.isEmpty {
+                    Button { model.duplicateSelection() } label: { Image(systemName: "plus.square.on.square") }
+                        .buttonStyle(ToolButtonStyle()).help("Duplicate")
+                    Button { model.deleteSelection() } label: { Image(systemName: "trash") }
+                        .buttonStyle(ToolButtonStyle()).help("Delete")
+                }
             }
         }
         .fixedSize()
     }
 
-    private var separator: some View { Divider().frame(height: 18).padding(.horizontal, 4) }
-
-    private var swatches: some View {
-        HStack(spacing: 2) {
-            ForEach(Array(Self.palette.enumerated()), id: \.offset) { _, color in
-                Button { setColor(color) } label: {
-                    Circle()
-                        .fill(Color(nsColor: color.nsColor))
-                        .overlay(Circle().strokeBorder(Color.primary.opacity(0.18), lineWidth: 0.5))
-                        .frame(width: 16, height: 16)
-                        .padding(3)
-                        .overlay(Circle().strokeBorder(model.color == color ? Color.primary.opacity(0.85) : .clear, lineWidth: 1.5))
-                        .frame(width: 26, height: 28)
-                        .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-                .accessibilityLabel("Color \(Self.palette.firstIndex(of: color).map { $0 + 1 } ?? 0)")
+    private var arrowStyle: some View {
+        HStack(spacing: 0) {
+            ForEach([AnnotationTool.arrow, .curvedArrow]) { tool in
+                Button { model.tool = tool; UserDefaults.standard.set(tool.rawValue, forKey: "arrowTool") } label: { Image(systemName: tool.symbol) }
+                    .buttonStyle(ToolButtonStyle(selected: model.tool == tool, size: CGSize(width: 28, height: 26)))
+                    .help(tool.title)
             }
-            ColorWellButton(color: Self.palette.contains(model.color) ? nil : model.color.nsColor) { setColor(AnnotationColor($0)) }
         }
+        .padding(2)
+        .background(Color.primary.opacity(0.06), in: RoundedRectangle(cornerRadius: Radius.control + 2, style: .continuous))
     }
 
-    private var strokeOptions: some View {
-        HStack(spacing: 2) {
-            ForEach(Self.strokes, id: \.self) { width in
-                Button { setLineWidth(width) } label: {
-                    Circle().frame(width: 3 + width * 0.75, height: 3 + width * 0.75)
+    private var redactMode: some View {
+        Menu {
+            ForEach(Self.redactModes, id: \.tool) { mode in
+                Button(mode.title) {
+                    model.tool = mode.tool
+                    UserDefaults.standard.set(mode.tool.rawValue, forKey: "redactTool")
                 }
-                .buttonStyle(ToolButtonStyle(selected: model.lineWidth == width, size: CGSize(width: 28, height: 28)))
-                .help("\(Int(width)) pt")
             }
-            Button("\(Int(model.lineWidth))") { showsStrokeSlider.toggle() }
-                .buttonStyle(ToolButtonStyle(selected: !Self.strokes.contains(model.lineWidth), size: CGSize(width: 30, height: 28)))
-                .font(.system(size: 11, weight: .semibold).monospacedDigit())
-                .help("Stroke Width")
-                .popover(isPresented: $showsStrokeSlider, arrowEdge: .bottom) {
-                    Slider(value: Binding(get: { model.lineWidth }, set: { setLineWidth($0.rounded()) }), in: 1...40)
-                        .frame(width: 180).padding(14)
-                }
+        } label: {
+            HStack(spacing: 4) {
+                Text(Self.redactModes.first { $0.tool == model.tool }?.title ?? "Pixelate").font(.system(size: 12, weight: .medium))
+                Image(systemName: "chevron.down").font(.system(size: 9, weight: .bold)).foregroundStyle(.secondary)
+            }
         }
+        .menuStyle(.button)
+        .menuIndicator(.hidden)
+        .buttonStyle(ToolButtonStyle(size: CGSize(width: 84, height: 28)))
+        .fixedSize()
+        .help("Redact Style")
     }
 
-    // line width drives pixel size and blur radius
-    private var strengthOptions: some View {
-        HStack(spacing: 8) {
-            Image(systemName: "circle.dotted").foregroundStyle(.secondary)
+    // line width doubles as blur and pixel strength
+    private func slider(icon: String, help: String) -> some View {
+        HStack(spacing: 6) {
+            Image(systemName: icon).font(.system(size: 12)).foregroundStyle(.secondary)
             Slider(value: Binding(get: { model.lineWidth }, set: { setLineWidth($0.rounded()) }), in: 1...40)
                 .controlSize(.small)
-                .frame(width: 140)
-                .accessibilityLabel("Strength")
-            Image(systemName: "circle.grid.3x3.fill").foregroundStyle(.secondary)
+                .frame(width: 90)
+                .accessibilityLabel(help)
         }
-        .font(.system(size: 12))
-        .padding(.horizontal, 8)
-        .frame(height: 28)
-        .help("Strength")
+        .help(help)
     }
 
-    private var textOptions: some View {
-        HStack(spacing: 2) {
-            Button { setFontSize(model.fontSize - 2) } label: { Image(systemName: "textformat.size.smaller") }
-                .buttonStyle(ToolButtonStyle()).help("Smaller")
-            Text("\(Int(model.fontSize))").font(.system(size: 11, weight: .semibold).monospacedDigit()).frame(width: 26)
-            Button { setFontSize(model.fontSize + 2) } label: { Image(systemName: "textformat.size.larger") }
-                .buttonStyle(ToolButtonStyle()).help("Larger")
-            Button { model.bold.toggle(); let value = model.bold; model.changeStyle { $0.bold = value } } label: { Image(systemName: "bold") }
-                .buttonStyle(ToolButtonStyle(selected: model.bold)).help("Bold")
-            Button { model.italic.toggle(); let value = model.italic; model.changeStyle { $0.italic = value } } label: { Image(systemName: "italic") }
-                .buttonStyle(ToolButtonStyle(selected: model.italic)).help("Italic")
+    private var sizeStepper: some View {
+        HStack(spacing: 0) {
+            Button { setFontSize(model.fontSize - 2) } label: { Image(systemName: "minus") }
+                .buttonStyle(ToolButtonStyle(size: CGSize(width: 24, height: 26))).help("Smaller")
+            Text("\(Int(model.fontSize))").font(.system(size: 12, weight: .semibold).monospacedDigit()).frame(width: 26)
+            Button { setFontSize(model.fontSize + 2) } label: { Image(systemName: "plus") }
+                .buttonStyle(ToolButtonStyle(size: CGSize(width: 24, height: 26))).help("Larger")
         }
-    }
-
-    private var selectionActions: some View {
-        HStack(spacing: 2) {
-            Button { model.duplicateSelection() } label: { Image(systemName: "plus.square.on.square") }
-                .buttonStyle(ToolButtonStyle()).help("Duplicate")
-            Button { model.bringSelectionToFront() } label: { Image(systemName: "square.3.layers.3d.top.filled") }
-                .buttonStyle(ToolButtonStyle()).help("Bring to Front")
-            Button { model.sendSelectionToBack() } label: { Image(systemName: "square.3.layers.3d.bottom.filled") }
-                .buttonStyle(ToolButtonStyle()).help("Send to Back")
-            Button { model.deleteSelection() } label: { Image(systemName: "trash") }
-                .buttonStyle(ToolButtonStyle()).help("Delete")
-        }
+        .padding(2)
+        .background(Color.primary.opacity(0.06), in: RoundedRectangle(cornerRadius: Radius.control + 2, style: .continuous))
+        .help("Size")
     }
 
     private var cropOptions: some View {
-        HStack(spacing: 2) {
-            ForEach(Self.cropRatios, id: \.title) { title, ratio in
-                Button(title) { model.cropAspectRatio = ratio }
-                    .buttonStyle(ToolButtonStyle(selected: model.cropAspectRatio == ratio, size: CGSize(width: 44, height: 28)))
-                    .font(.system(size: 12, weight: .medium))
+        HStack(spacing: 6) {
+            Menu {
+                ForEach(Self.cropRatios, id: \.title) { item in
+                    Button(item.title) { model.cropAspectRatio = item.ratio }
+                }
+            } label: {
+                HStack(spacing: 4) {
+                    Text(Self.cropRatios.first { $0.ratio == model.cropAspectRatio }?.title ?? "Free").font(.system(size: 12, weight: .medium))
+                    Image(systemName: "chevron.down").font(.system(size: 9, weight: .bold)).foregroundStyle(.secondary)
+                }
             }
-            separator
+            .menuStyle(.button)
+            .menuIndicator(.hidden)
+            .buttonStyle(ToolButtonStyle(size: CGSize(width: 66, height: 28)))
+            .fixedSize()
+            .help("Aspect Ratio")
             Button { model.resetCrop() } label: { Image(systemName: "arrow.counterclockwise") }
                 .buttonStyle(ToolButtonStyle()).help("Reset Crop")
         }
     }
 
-    private func setColor(_ color: AnnotationColor) { model.color = color; model.changeStyle { $0.color = color } }
     private func setLineWidth(_ width: Double) { model.lineWidth = width; model.changeStyle { $0.lineWidth = width } }
     private func setFilled(_ filled: Bool) { model.filled = filled; model.changeStyle { $0.filled = filled } }
     private func setFontSize(_ size: Double) {
         let size = min(512, max(6, size))
         model.fontSize = size
-        model.changeStyle { $0.fontSize = size }
+        model.changeStyle { item in
+            item.fontSize = size
+            guard item.tool == .counter else { return }
+            let side = max(32, size * 1.6)
+            item.rect = CGRect(x: item.rect.midX - side / 2, y: item.rect.midY - side / 2, width: side, height: side)
+        }
+    }
+}
+
+// always within reach on the canvas edge, 1 to 9 pick these from the keyboard
+private struct ColorColumn: View {
+    @ObservedObject var model: ImageEditorModel
+
+    private var active: Bool { !EditorTools.active(model).isDisjoint(with: EditorTools.color) }
+
+    var body: some View {
+        VStack(spacing: 4) {
+            ForEach(Array(AnnotationColor.palette.enumerated()), id: \.offset) { index, color in
+                Button { model.setColor(color) } label: {
+                    Circle()
+                        .fill(Color(nsColor: color.nsColor))
+                        .overlay(Circle().strokeBorder(Color.black.opacity(0.15), lineWidth: 0.5))
+                        .frame(width: 18, height: 18)
+                        .padding(3)
+                        .overlay(Circle().strokeBorder(model.color == color ? Color.primary.opacity(0.85) : .clear, lineWidth: 1.5))
+                        .frame(width: 30, height: 28)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .help("\(AnnotationColor.paletteNames[index])  \(index + 1)")
+                .accessibilityLabel(AnnotationColor.paletteNames[index])
+            }
+            Divider().frame(width: 18).padding(.vertical, 2)
+            ColorWellButton(color: AnnotationColor.palette.contains(model.color) ? nil : model.color.nsColor) { model.setColor(AnnotationColor($0)) }
+        }
+        .padding(.vertical, 8)
+        .padding(.horizontal, 3)
+        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: Radius.card, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: Radius.card, style: .continuous).strokeBorder(Color.primary.opacity(0.08)))
+        .shadow(color: .black.opacity(0.1), radius: 8, y: 2)
+        .opacity(active ? 1 : 0.4)
+        .disabled(!active || model.document == nil)
+        .animation(.easeOut(duration: 0.15), value: active)
+    }
+}
+
+// drag the finished image straight into another app
+private struct DragHandle: View {
+    let flatten: () async -> URL?
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "line.3.horizontal").font(.system(size: 11, weight: .semibold)).foregroundStyle(.secondary)
+            Text("Drag").font(.system(size: 12, weight: .semibold))
+            Image(systemName: "line.3.horizontal").font(.system(size: 11, weight: .semibold)).foregroundStyle(.secondary)
+        }
+        .padding(.horizontal, 16)
+        .frame(height: 28)
+        .background(Capsule().fill(Color.primary.opacity(0.07)))
+        .overlay(Capsule().strokeBorder(Color.primary.opacity(0.1)))
+        .contentShape(Capsule())
+        .help("Drag the image into any app")
+        .onDrag {
+            let provider = NSItemProvider()
+            provider.suggestedName = "Glint"
+            provider.registerFileRepresentation(forTypeIdentifier: UTType.png.identifier, fileOptions: [], visibility: .all) { completion in
+                Task { @MainActor in
+                    let url = await flatten()
+                    completion(url, false, url == nil ? GlintError.message("The image couldn’t be prepared.") : nil)
+                }
+                return nil
+            }
+            return provider
+        }
     }
 }
 
