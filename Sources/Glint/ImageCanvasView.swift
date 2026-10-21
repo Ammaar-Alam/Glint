@@ -445,6 +445,7 @@ final class ImageCanvasView: NSView {
         default:
             if key == " " { spacePressed = true; NSCursor.openHand.set() }
             else if let tool = AnnotationTool.allCases.first(where: { $0.keyboardKey == key }) {
+                if tool == .crop { model.select(nil) }
                 model.tool = tool
                 window?.invalidateCursorRects(for: self)
             } else { super.keyDown(with: event) }
