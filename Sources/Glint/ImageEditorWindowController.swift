@@ -300,6 +300,7 @@ private struct ImageEditorView: View {
     @State private var sizePopover: ImageSizePopover?
     @AppStorage("redactTool") private var redactTool = AnnotationTool.pixelate.rawValue
     @AppStorage("arrowTool") private var arrowTool = AnnotationTool.arrow.rawValue
+    @Namespace private var toolSelection
 
     var body: some View {
         VStack(spacing: 0) {
@@ -372,8 +373,15 @@ private struct ImageEditorView: View {
                     case .arrow: select(AnnotationTool(rawValue: arrowTool) ?? .arrow)
                     default: select(tool)
                     }
-                } label: { Image(systemName: tool == .pixelate ? "eye.slash" : tool.symbol) }
-                .buttonStyle(ToolButtonStyle(selected: selected, size: CGSize(width: 32, height: 30), prominent: true))
+                } label: { Image(systemName: tool == .pixelate ? "checkerboard.rectangle" : tool.symbol) }
+                .buttonStyle(ToolButtonStyle(selected: selected, size: CGSize(width: 32, height: 30), prominent: true, drawsSelection: false))
+                .background {
+                    if selected {
+                        RoundedRectangle(cornerRadius: Radius.control, style: .continuous)
+                            .fill(Color.glint)
+                            .matchedGeometryEffect(id: "tool", in: toolSelection)
+                    }
+                }
                 .help(Self.help(tool))
                 .accessibilityLabel(tool == .pixelate ? "Redact" : tool.title)
                 .accessibilityAddTraits(selected ? .isSelected : [])
@@ -381,11 +389,12 @@ private struct ImageEditorView: View {
         }
         .padding(3)
         .background(Color.primary.opacity(0.05), in: RoundedRectangle(cornerRadius: Radius.control + 3, style: .continuous))
+        .animation(.spring(response: 0.28, dampingFraction: 0.82), value: model.tool)
         .fixedSize()
     }
 
     private static func help(_ tool: AnnotationTool) -> String {
-        if tool == .pixelate { return "Redact  B" }
+        if tool == .pixelate { return "Redact: blur, pixelate or cover  B" }
         return tool.title + (tool.keyboardKey.map { "  \($0.uppercased())" } ?? "")
     }
 
@@ -491,8 +500,8 @@ private struct InlineOptions: View {
             } else {
                 if model.selectedIDs.isEmpty && EditorTools.arrows.contains(model.tool) { arrowStyle }
                 if model.selectedIDs.isEmpty && EditorTools.redact.contains(model.tool) { redactMode }
-                if !tools.isDisjoint(with: EditorTools.stroke) { slider(icon: "lineweight", help: "Stroke") }
-                if !tools.isDisjoint(with: [.blur, .pixelate]) { slider(icon: "drop.halffull", help: "Strength") }
+                if !tools.isDisjoint(with: EditorTools.stroke) { slider(help: "Size") }
+                if !tools.isDisjoint(with: [.blur, .pixelate]) { slider(help: "Strength") }
                 if !tools.isDisjoint(with: [.rectangle, .ellipse]) {
                     Button { setFilled(!model.filled) } label: { Image(systemName: model.filled ? "square.fill" : "square") }
                         .buttonStyle(ToolButtonStyle(selected: model.filled)).help("Fill")
@@ -532,30 +541,22 @@ private struct InlineOptions: View {
     }
 
     private var redactMode: some View {
-        Menu {
+        Segmented {
             ForEach(Self.redactModes, id: \.tool) { mode in
                 Button(mode.title) {
                     model.tool = mode.tool
                     UserDefaults.standard.set(mode.tool.rawValue, forKey: "redactTool")
                 }
-            }
-        } label: {
-            HStack(spacing: 4) {
-                Text(Self.redactModes.first { $0.tool == model.tool }?.title ?? "Pixelate").font(.system(size: 12, weight: .medium))
-                Image(systemName: "chevron.down").font(.system(size: 9, weight: .bold)).foregroundStyle(.secondary)
+                .buttonStyle(ToolButtonStyle(selected: model.tool == mode.tool, size: CGSize(width: 64, height: 24)))
+                .font(.system(size: 12, weight: .medium))
             }
         }
-        .menuStyle(.button)
-        .menuIndicator(.hidden)
-        .buttonStyle(ToolButtonStyle(size: CGSize(width: 84, height: 28)))
-        .fixedSize()
-        .help("Redact Style")
     }
 
     // line width doubles as blur and pixel strength
-    private func slider(icon: String, help: String) -> some View {
-        HStack(spacing: 6) {
-            Image(systemName: icon).font(.system(size: 12)).foregroundStyle(.secondary)
+    private func slider(help: String) -> some View {
+        HStack(spacing: 8) {
+            Text(help).font(.system(size: 12, weight: .medium)).foregroundStyle(.secondary)
             Slider(value: Binding(get: { model.lineWidth }, set: { setLineWidth($0.rounded()) }), in: 1...40) { editing in
                 if editing { model.beginAdjusting() } else { model.endAdjusting() }
             }
@@ -618,37 +619,82 @@ private struct InlineOptions: View {
 // always within reach on the canvas edge, 1 to 9 pick these from the keyboard
 private struct ColorColumn: View {
     @ObservedObject var model: ImageEditorModel
+    @State private var expanded = false
+
+    // hue columns with a gray column, light to dark rows
+    private static let extended: [[AnnotationColor]] = [(0.95, 0.3), (0.95, 0.55), (0.92, 0.85), (0.72, 0.9), (0.45, 0.9)].map { brightness, saturation in
+        [0.0, 0.07, 0.13, 0.33, 0.5, 0.6, 0.75, 0.88].map { AnnotationColor(NSColor(hue: $0, saturation: saturation, brightness: brightness, alpha: 1)) }
+            + [AnnotationColor(red: brightness * 0.95, green: brightness * 0.95, blue: brightness * 0.97)]
+    }
 
     private var active: Bool { !EditorTools.active(model).isDisjoint(with: EditorTools.color) }
 
     var body: some View {
-        VStack(spacing: 4) {
-            ForEach(Array(AnnotationColor.palette.enumerated()), id: \.offset) { index, color in
-                Button { model.setColor(color) } label: {
+        HStack(alignment: .center, spacing: 8) {
+            VStack(spacing: 4) {
+                ForEach(Array(AnnotationColor.palette.enumerated()), id: \.offset) { index, color in
+                    swatch(color, size: 18)
+                        .help("\(AnnotationColor.paletteNames[index])  \(index + 1)")
+                        .accessibilityLabel(AnnotationColor.paletteNames[index])
+                }
+                Divider().frame(width: 18).padding(.vertical, 2)
+                Button { expanded.toggle() } label: {
                     Circle()
-                        .fill(Color(nsColor: color.nsColor))
-                        .overlay(Circle().strokeBorder(Color.black.opacity(0.15), lineWidth: 0.5))
+                        .fill(AngularGradient(colors: [.red, .yellow, .green, .cyan, .blue, .purple, .red], center: .center))
                         .frame(width: 18, height: 18)
-                        .padding(3)
-                        .overlay(Circle().strokeBorder(model.color == color ? Color.primary.opacity(0.85) : .clear, lineWidth: 1.5))
+                        .overlay(Image(systemName: expanded ? "chevron.left" : "chevron.right").font(.system(size: 8, weight: .heavy)).foregroundStyle(.white).shadow(radius: 1))
                         .frame(width: 30, height: 28)
                         .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
-                .help("\(AnnotationColor.paletteNames[index])  \(index + 1)")
-                .accessibilityLabel(AnnotationColor.paletteNames[index])
+                .help("More Colors")
             }
-            Divider().frame(width: 18).padding(.vertical, 2)
-            ColorWellButton(color: AnnotationColor.palette.contains(model.color) ? nil : model.color.nsColor) { model.setColor(AnnotationColor($0)) }
+            .padding(.vertical, 8)
+            .padding(.horizontal, 3)
+            .background(.regularMaterial, in: RoundedRectangle(cornerRadius: Radius.card, style: .continuous))
+            .overlay(RoundedRectangle(cornerRadius: Radius.card, style: .continuous).strokeBorder(Color.primary.opacity(0.08)))
+            .shadow(color: .black.opacity(0.1), radius: 8, y: 2)
+            if expanded {
+                VStack(alignment: .leading, spacing: 4) {
+                    ForEach(Array(Self.extended.enumerated()), id: \.offset) { _, row in
+                        HStack(spacing: 4) {
+                            ForEach(Array(row.enumerated()), id: \.offset) { _, color in swatch(color, size: 20) }
+                        }
+                    }
+                    Button("Custom…") { ColorPanelBridge.shared.open(model.color.nsColor) { model.setColor(AnnotationColor($0)) } }
+                        .buttonStyle(.plain)
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundStyle(Color.glint)
+                        .padding(.top, 4)
+                        .padding(.leading, 6)
+                }
+                .padding(10)
+                .background(.regularMaterial, in: RoundedRectangle(cornerRadius: Radius.card, style: .continuous))
+                .overlay(RoundedRectangle(cornerRadius: Radius.card, style: .continuous).strokeBorder(Color.primary.opacity(0.08)))
+                .shadow(color: .black.opacity(0.12), radius: 10, y: 3)
+                .transition(.asymmetric(insertion: .scale(scale: 0.92, anchor: .leading).combined(with: .opacity), removal: .opacity))
+            }
         }
-        .padding(.vertical, 8)
-        .padding(.horizontal, 3)
-        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: Radius.card, style: .continuous))
-        .overlay(RoundedRectangle(cornerRadius: Radius.card, style: .continuous).strokeBorder(Color.primary.opacity(0.08)))
-        .shadow(color: .black.opacity(0.1), radius: 8, y: 2)
         .opacity(active ? 1 : 0.4)
         .disabled(!active || model.document == nil)
+        .animation(.spring(response: 0.3, dampingFraction: 0.82), value: expanded)
         .animation(.easeOut(duration: 0.15), value: active)
+    }
+
+    private func swatch(_ color: AnnotationColor, size: CGFloat) -> some View {
+        Button { model.setColor(color) } label: {
+            Circle()
+                .fill(Color(nsColor: color.nsColor))
+                .overlay(Circle().strokeBorder(Color.black.opacity(0.15), lineWidth: 0.5))
+                .frame(width: size, height: size)
+                .padding(3)
+                .overlay(Circle().strokeBorder(model.color == color ? Color.primary.opacity(0.85) : .clear, lineWidth: 1.5))
+                .scaleEffect(model.color == color ? 1.08 : 1)
+                .animation(.spring(response: 0.25, dampingFraction: 0.7), value: model.color == color)
+                .frame(width: size + 10, height: size + 8)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
     }
 }
 
@@ -686,16 +732,6 @@ private struct DragHandle: View {
 private struct BackgroundPanel: View {
     @ObservedObject var model: ImageEditorModel
 
-    private static let gradients: [(AnnotationColor, AnnotationColor)] = [
-        (AnnotationColor(red: 0.04, green: 0.5, blue: 0.7), AnnotationColor(red: 0.13, green: 0.89, blue: 0.96)),
-        (AnnotationColor(red: 1, green: 0.42, blue: 0.36), AnnotationColor(red: 0.99, green: 0.76, blue: 0.36)),
-        (AnnotationColor(red: 0.52, green: 0.26, blue: 0.86), AnnotationColor(red: 0.96, green: 0.37, blue: 0.6)),
-        (AnnotationColor(red: 0.14, green: 0.3, blue: 0.86), AnnotationColor(red: 0.32, green: 0.76, blue: 0.96)),
-        (AnnotationColor(red: 0.16, green: 0.72, blue: 0.52), AnnotationColor(red: 0.68, green: 0.93, blue: 0.6)),
-        (AnnotationColor(red: 0.98, green: 0.6, blue: 0.56), AnnotationColor(red: 0.99, green: 0.87, blue: 0.78)),
-        (AnnotationColor(red: 0.15, green: 0.16, blue: 0.2), AnnotationColor(red: 0.34, green: 0.36, blue: 0.43)),
-        (AnnotationColor(red: 0.9, green: 0.91, blue: 0.94), AnnotationColor(red: 0.99, green: 0.99, blue: 1))
-    ]
 
     private static let ratios: [(title: String, ratio: Double)] = [("Auto", 0), ("1:1", 1), ("16:9", 16.0 / 9), ("9:16", 9.0 / 16), ("4:3", 4.0 / 3)]
     private var background: ImageBackground { model.document?.background ?? ImageBackground() }
@@ -709,17 +745,21 @@ private struct BackgroundPanel: View {
                     Toggle("Background", isOn: binding(\.enabled)).toggleStyle(FlatToggleStyle()).labelsHidden()
                 }
                 LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 8), count: 4), spacing: 8) {
-                    ForEach(Array(Self.gradients.enumerated()), id: \.offset) { index, pair in
-                        tile(top: pair.0, bottom: pair.1, selected: background.enabled && background.imageID == nil && background.gradient && background.color == pair.0 && background.secondColor == pair.1) {
-                            model.mutate("Background") {
-                                $0.background.enabled = true
-                                $0.background.gradient = true
-                                $0.background.imageID = nil
-                                $0.background.color = pair.0
-                                $0.background.secondColor = pair.1
-                            }
+                    ForEach(0..<Wallpaper.count, id: \.self) { index in
+                        Button { applyWallpaper(index) } label: {
+                            Image(nsImage: Wallpaper.thumbnails[index])
+                                .resizable()
+                                .aspectRatio(contentMode: .fill)
+                                .frame(height: 40)
+                                .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+                                .overlay(RoundedRectangle(cornerRadius: 8, style: .continuous).strokeBorder(Color.primary.opacity(0.1)))
+                                .padding(2)
+                                .overlay(RoundedRectangle(cornerRadius: 10, style: .continuous).strokeBorder(background.enabled && background.imageID == Wallpaper.id(index) ? Color.glint : .clear, lineWidth: 2))
+                                .contentShape(Rectangle())
                         }
-                        .accessibilityLabel("Gradient \(index + 1)")
+                        .buttonStyle(.plain)
+                        .help(Wallpaper.names[index])
+                        .accessibilityLabel(Wallpaper.names[index])
                     }
                     ForEach(Array(model.backgroundPresets.enumerated()), id: \.offset) { index, preset in
                         tile(top: preset.color, bottom: preset.gradient ? preset.secondColor : preset.color, selected: background == preset) {
@@ -800,6 +840,19 @@ private struct BackgroundPanel: View {
         }
         .background(.bar, ignoresSafeAreaEdges: [])
         .disabled(model.document == nil || model.busy)
+    }
+
+    private func applyWallpaper(_ index: Int) {
+        var next = background
+        next.enabled = true
+        next.imageID = Wallpaper.id(index)
+        let directory = ImageEditorModel.presetDirectory
+        Task {
+            do {
+                _ = try await Task.detached(priority: .userInitiated) { try Wallpaper.file(index, in: directory) }.value
+                model.applyBackgroundPreset(next)
+            } catch { model.errorMessage = error.localizedDescription }
+        }
     }
 
     private func tile(top: AnnotationColor, bottom: AnnotationColor, selected: Bool, action: @escaping () -> Void) -> some View {
