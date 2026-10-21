@@ -26,8 +26,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var captureCommandMenu: NSMenu?
     private var historyWindow: NSWindow?
     private var settingsWindow: NSWindow?
-    private var recordingSetup: NSWindow?
     private var recordingPanel: NSPanel?
+    private var recordingOptions = RecordingOptions()
     private var editors: [NSWindowController] = []
     private var pins: [PinnedImagePanel] = []
     private var captureTask: Task<Void, Never>?
@@ -59,10 +59,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         updateStatus()
         shortcuts.onAction = { [weak self] in self?.perform($0) }
         shortcuts.start()
-        capture.onRecord = { [weak self] in
+        capture.onRecord = { [weak self] target, options in
             Task { @MainActor [weak self] in
                 await self?.captureTask?.value
-                self?.showRecordingSetup()
+                self?.startRecording(options, target: target)
             }
         }
         shelf.onCommand = { [weak self] in self?.perform($0, on: $1) }
@@ -231,6 +231,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             record.show(shortcuts.shortcuts[.record])
             record.isEnabled = recorder.state == .idle
             menu.addItem(record)
+            let gif = HandlerMenuItem("Record GIF…", symbol: "photo.stack") { [weak self] in self?.showRecordingSetup(.gif) }
+            gif.isEnabled = recorder.state == .idle
+            menu.addItem(gif)
         }
     }
 
@@ -285,12 +288,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
     }
 
-    func takeCapture(_ mode: CaptureMode) {
+    func takeCapture(_ mode: CaptureMode, recording: RecordingFormat? = nil) {
         guard terminationTask == nil, captureTask == nil, !capture.isCapturing, recorder.state == .idle else { NSSound.beep(); return }
         captureTask = Task {
             defer { captureTask = nil }
             do {
-                guard let result = try await captureWithHiddenWindows(mode) else { return }
+                guard let result = try await captureWithHiddenWindows(mode, recording: recording) else { return }
                 if let text = result.recognizedText {
                     showRecognizedText(text)
                     await cleanupTemporaryCapture(result.url)
@@ -319,11 +322,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         shelf.restoreAfterCapture()
     }
 
-    private func captureWithHiddenWindows(_ mode: CaptureMode) async throws -> CaptureResult? {
+    private func captureWithHiddenWindows(_ mode: CaptureMode, recording: RecordingFormat? = nil) async throws -> CaptureResult? {
         let hidden = hideCaptureWindows()
         defer { restoreCaptureWindows(hidden) }
         configureCapture()
-        return try await capture.capture(mode, delay: TimeInterval(UserDefaults.standard.integer(forKey: "captureDelay")))
+        return try await capture.capture(mode, recording: recording)
     }
 
     private func handleCapture(_ item: CaptureItem, recording: Bool = false) {
@@ -490,7 +493,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         clipboardTask?.cancel()
         let clipboard = ClipboardWriter.general
         let request = clipboard.begin()
-        if item.kind.isVideo {
+        // a GIF goes as its file so it stays animated where it is pasted
+        if item.kind.isVideo || item.filename.hasSuffix(".gif") {
             if item.kind == .videoProject { edit(item); return }
             clipboard.commit(request) { _ = $0.writeObjects([item.url(in: library.root) as NSURL]) }
             return
@@ -633,30 +637,45 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         NSApp.activate(ignoringOtherApps: true)
     }
 
-    func showRecordingSetup() {
-        guard terminationTask == nil, recorder.state == .idle, recordingTask == nil, !capture.isCapturing else { recordingPanel?.orderFrontRegardless(); return }
-        recordingSetup = makeWindow(title: "Record", size: NSSize(width: 460, height: 560), root: RecordingSetupView { [weak self] options in self?.startRecording(options) })
-        recordingSetup?.makeKeyAndOrderFront(nil)
-        NSApp.activate(ignoringOtherApps: true)
+    // recording starts from the capture overlay with its recording bar showing
+    func showRecordingSetup(_ format: RecordingFormat = .video) {
+        guard terminationTask == nil, recorder.state == .idle, recordingTask == nil, recordingPanel?.isVisible != true else {
+            recordingPanel?.orderFrontRegardless(); return
+        }
+        takeCapture(.allInOne, recording: format)
     }
 
-    private func startRecording(_ options: RecordingOptions) {
+    private func startRecording(_ options: RecordingOptions, target: CaptureSelection) {
         guard terminationTask == nil, recorder.state == .idle, recordingTask == nil, !capture.isCapturing else { return }
-        recordingSetup?.orderOut(nil)
+        recordingOptions = options
         recordingHiddenWindows = hideCaptureWindows()
-        let panel = NSPanel(contentRect: NSRect(x: 0, y: 0, width: 360, height: 100), styleMask: [.titled, .nonactivatingPanel], backing: .buffered, defer: false)
+        let panel = NSPanel(contentRect: NSRect(x: 0, y: 0, width: 320, height: 72), styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
         panel.title = "Recording"
         panel.level = .floating
+        panel.isOpaque = false
+        panel.backgroundColor = .clear
+        panel.hasShadow = false
         panel.hidesOnDeactivate = false
         panel.isReleasedWhenClosed = false
         panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
-        panel.contentView = NSHostingView(rootView: RecordingControls(recorder: recorder, onPause: togglePause, onStop: stopRecording, onCancel: { [weak self] in self?.recordingTask?.cancel() }))
-        panel.center()
+        let host = FirstMouseHostingView(rootView: RecordingControls(
+            recorder: recorder, showsMicrophone: options.capturesMicrophone, onPause: togglePause, onStop: stopRecording,
+            onCancel: { [weak self] in self?.recordingTask?.cancel() },
+            onRestart: { [weak self] in self?.discardRecording(restart: true) },
+            onDelete: { [weak self] in self?.discardRecording(restart: false) }))
+        host.sizingOptions = []
+        panel.contentView = host
+        let screen = NSScreen.screens.first { $0.frame.contains(NSEvent.mouseLocation) } ?? NSScreen.main
+        if let frame = screen?.visibleFrame {
+            // wide enough for every state, the capsule centers itself
+            let size = CGSize(width: 420, height: host.fittingSize.height)
+            panel.setFrame(CGRect(x: (frame.midX - size.width / 2).rounded(), y: frame.minY + 8, width: size.width, height: size.height), display: false)
+        }
         recordingPanel = panel
         panel.orderFrontRegardless()
         recordingTask = Task {
             defer { recordingTask = nil }
-            do { try await recorder.start(options: options) }
+            do { try await recorder.start(options: options, target: target) }
             catch is CancellationError { panel.orderOut(nil); restoreRecordingWindows() }
             catch { panel.orderOut(nil); restoreRecordingWindows(); showError(error) }
         }
@@ -668,10 +687,35 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         Task {
             defer { pendingWrites -= 1 }
             do {
-                let item = try await finishRecording()
-                handleCapture(item, recording: true)
+                let item = try await finishRecording(gif: recordingOptions.format == .gif)
+                // a recorded gif goes straight to the popup, video projects follow the recording actions
+                if item.kind.isVideo { handleCapture(item, recording: true) } else { shelf.present(item) }
                 if let warning = recorder.lastWarning { showError(GlintError.message(warning)) }
             } catch { showError(error) }
+        }
+    }
+
+    // restart and delete throw away what was recorded, so they ask first
+    private func discardRecording(restart: Bool) {
+        guard recorder.state == .recording || recorder.state == .paused else { return }
+        let alert = NSAlert()
+        alert.messageText = restart ? "Restart recording?" : "Delete recording?"
+        alert.informativeText = "What you’ve recorded so far will be deleted."
+        alert.addButton(withTitle: restart ? "Restart" : "Delete")
+        alert.addButton(withTitle: "Cancel")
+        if !restart { alert.buttons.first?.hasDestructiveAction = true }
+        NSApp.activate(ignoringOtherApps: true)
+        guard alert.runModal() == .alertFirstButtonReturn, recorder.state == .recording || recorder.state == .paused else { return }
+        let options = recordingOptions
+        pendingWrites += 1
+        Task {
+            defer { pendingWrites -= 1 }
+            do {
+                defer { recordingPanel?.orderOut(nil); restoreRecordingWindows() }
+                let url = try await recorder.stop()
+                try await Task.detached(priority: .utility) { try FileManager.default.removeItem(at: url) }.value
+            } catch { showError(error); return }
+            if restart { showRecordingSetup(options.format) }
         }
     }
 
@@ -689,9 +733,27 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         recordingHiddenWindows.removeAll()
     }
 
-    private func finishRecording() async throws -> CaptureItem {
-        defer { recordingPanel?.orderOut(nil); restoreRecordingWindows() }
-        return try await ingestRecording(try await recorder.stop())
+    // a GIF that fails to render falls back to the saved project
+    private func finishRecording(gif: Bool = false) async throws -> CaptureItem {
+        let panel = recordingPanel
+        defer { panel?.orderOut(nil) }
+        let item: CaptureItem
+        do {
+            item = try await ingestRecording(try await recorder.stop())
+            restoreRecordingWindows()
+        } catch { restoreRecordingWindows(); throw error }
+        guard gif else { return item }
+        (panel?.contentView as? FirstMouseHostingView<RecordingControls>)?.rootView.saving = true
+        do { return try await makeGIF(from: item) }
+        catch { showError(error); return item }
+    }
+
+    private func makeGIF(from item: CaptureItem) async throws -> CaptureItem {
+        let project = item.url(in: library.root)
+        let output = ImageFile.temporaryURL(extension: "gif")
+        do { try await VideoExporter.recordingGIF(project: project, destination: output) }
+        catch { await cleanupTemporaryCapture(output); throw error }
+        return try await ingestTemporaryCapture(output)
     }
 
     private func ingestRecording(_ url: URL) async throws -> CaptureItem {

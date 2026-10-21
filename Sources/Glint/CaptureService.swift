@@ -40,11 +40,14 @@ final class CaptureService {
     var showWindowShadow = true
     var freezeScreen = false
     var hideDesktop = false
-    var onRecord: (() -> Void)?
+    var onRecord: ((CaptureSelection, RecordingOptions) -> Void)?
     private(set) var isCapturing = false
     private let regionDefaultsKey = "lastCaptureRegion"
+    // read late so the timer in the selection bar applies to this capture
+    private static var delay: TimeInterval { TimeInterval(UserDefaults.standard.integer(forKey: "captureDelay")) }
 
-    func capture(_ mode: CaptureMode, delay: TimeInterval = 0) async throws -> CaptureResult? {
+    // recording opens the selection with the recording bar already showing
+    func capture(_ mode: CaptureMode, recording: RecordingFormat? = nil) async throws -> CaptureResult? {
         guard !isCapturing else { throw GlintError.message("A capture is already in progress.") }
         isCapturing = true
         defer { isCapturing = false }
@@ -58,8 +61,8 @@ final class CaptureService {
         let needsSelector = mode != .fullScreen && mode != .previousArea
         var frozenFrames: [FrozenDisplayFrame] = []
         var delayed = false
-        if freezeScreen && needsSelector && mode != .window && mode != .scrolling {
-            guard await CaptureCountdown.wait(seconds: delay) else { return nil }
+        if freezeScreen && needsSelector && mode != .window && mode != .scrolling && recording == nil {
+            guard await CaptureCountdown.wait(seconds: Self.delay) else { return nil }
             delayed = true
             for display in content.displays {
                 let image = try await CaptureFrame.region(display.frame, content: content, showsCursor: cursor, hideDesktop: hiddenDesktop)
@@ -68,10 +71,18 @@ final class CaptureService {
         }
         let selected: CaptureSelection
         if needsSelector {
+            let loupe = UserDefaults.standard.bool(forKey: "showMagnifier")
+            let snapshots: (() async -> [FrozenDisplayFrame])? = loupe && frozenFrames.isEmpty ? {
+                var frames: [FrozenDisplayFrame] = []
+                for display in content.displays {
+                    guard let image = try? await CaptureFrame.region(display.frame, content: content, showsCursor: false, hideDesktop: hiddenDesktop) else { continue }
+                    frames.append(FrozenDisplayFrame(displayID: display.displayID, frame: display.frame, image: image))
+                }
+                return frames
+            } : nil
             guard let choice = await SelectionController.selectCapture(mode: mode, windows: content.windows, frozenFrames: frozenFrames,
-                                                                       allowsRecording: onRecord != nil, magnifier: { rect in
-                try? await CaptureFrame.region(rect, content: content, showsCursor: false, hideDesktop: hiddenDesktop)
-            }) else { return nil }
+                                                                       allowsRecording: onRecord != nil, recording: recording,
+                                                                       showsLoupe: loupe, snapshots: snapshots) else { return nil }
             selected = choice
         } else if mode == .fullScreen {
             let point = CaptureGeometry.quartzPoint(fromCocoa: NSEvent.mouseLocation, primaryHeight: CGDisplayBounds(CGMainDisplayID()).height)
@@ -89,8 +100,8 @@ final class CaptureService {
             }
             selected = .region(rect, .previousArea)
         }
-        if case .record = selected { onRecord?(); return nil }
-        if !delayed, !(await CaptureCountdown.wait(seconds: delay)) { return nil }
+        if case .record(let target, let options) = selected { onRecord?(target, options); return nil }
+        if !delayed, !(await CaptureCountdown.wait(seconds: Self.delay)) { return nil }
         let image: CGImage
         let effectiveMode: CaptureMode
         switch selected {

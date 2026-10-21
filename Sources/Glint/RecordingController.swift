@@ -35,7 +35,7 @@ final class RecordingController {
     @ObservationIgnored private var preparationError: Error?
     private let metadataQueue = DispatchQueue(label: "Glint.recording.metadata", qos: .utility)
 
-    func start(options: RecordingOptions) async throws {
+    func start(options: RecordingOptions, target: CaptureSelection) async throws {
         guard state == .idle else { throw GlintError.message("A recording is already in progress.") }
         guard (1...120).contains(options.framesPerSecond), (320...7680).contains(options.maximumDimension),
               (0...10).contains(options.countdown) else { throw GlintError.message("Choose a supported recording quality and countdown.") }
@@ -55,8 +55,9 @@ final class RecordingController {
             }
             try Task.checkCancellation()
             let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true)
-            let selection = try await selectContent(content, mode: options.mode)
-            captureRect = selection.rect; isWindowCapture = options.mode == .window
+            let selection = try selectContent(content, target: target)
+            captureRect = selection.rect
+            if case .window = target { isWindowCapture = true } else { isWindowCapture = false }
             let config = SCStreamConfiguration()
             let size = Self.outputSize(for: selection.rect.size, scale: Double(selection.filter.pointPixelScale), maximumDimension: options.maximumDimension)
             config.width = Int(size.width); config.height = Int(size.height)
@@ -345,27 +346,22 @@ final class RecordingController {
         guard granted else { throw GlintError.message("Allow Glint in System Settings → Privacy & Security → \(name), then try again.") }
     }
 
-    private func selectContent(_ content: SCShareableContent, mode: RecordingMode) async throws -> (filter: SCContentFilter, rect: CGRect, sourceRect: CGRect?) {
-        let ownPID = ProcessInfo.processInfo.processIdentifier
-        switch mode {
-        case .window:
-            let windows = content.windows.filter { $0.owningApplication?.processID != ownPID && $0.frame.width > 50 && $0.frame.height > 50 && $0.windowLayer == 0 }
-            guard let window = await SelectionController.selectWindow(from: windows) else { throw CancellationError() }
+    private func selectContent(_ content: SCShareableContent, target: CaptureSelection) throws -> (filter: SCContentFilter, rect: CGRect, sourceRect: CGRect?) {
+        switch target {
+        case .window(let chosen):
+            guard let window = content.windows.first(where: { $0.windowID == chosen.windowID }) else {
+                throw GlintError.message("The window is no longer available to record.")
+            }
             return (SCContentFilter(desktopIndependentWindow: window), window.frame, nil)
-        case .area:
-            guard let rect = await SelectionController.selectRegion() else { throw CancellationError() }
+        case .region(let rect, let mode):
             guard let display = content.displays.first(where: { $0.frame.contains(rect) }) else {
                 throw GlintError.message("Choose a recording area inside one display.")
             }
-            let source = rect.offsetBy(dx: -display.frame.minX, dy: -display.frame.minY)
-            return (CaptureFrame.displayFilter(display: display, content: content, hideDesktop: options.hideDesktop), rect, source)
-        case .fullScreen:
-            let mouse = NSEvent.mouseLocation
-            let pointer = CGPoint(x: mouse.x, y: CGDisplayBounds(CGMainDisplayID()).height - mouse.y)
-            guard let display = content.displays.first(where: { $0.frame.contains(pointer) }) ?? content.displays.first else {
-                throw GlintError.message("No display is available to record.")
-            }
-            return (CaptureFrame.displayFilter(display: display, content: content, hideDesktop: options.hideDesktop), display.frame, nil)
+            let filter = CaptureFrame.displayFilter(display: display, content: content, hideDesktop: options.hideDesktop)
+            if mode == .fullScreen { return (filter, display.frame, nil) }
+            return (filter, rect, rect.offsetBy(dx: -display.frame.minX, dy: -display.frame.minY))
+        case .record:
+            throw GlintError.message("Choose what to record.")
         }
     }
 

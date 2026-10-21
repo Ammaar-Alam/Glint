@@ -18,6 +18,30 @@ final class CaptureTests: XCTestCase {
                        CGRect(x: 0, y: 0, width: 160, height: 90))
     }
 
+    func testSelectionHandlesMoveResizeAndKeepRatio() {
+        let rect = CGRect(x: 100, y: 100, width: 200, height: 100)
+        XCTAssertEqual(CaptureGeometry.adjusted(rect, edges: (0, 0), by: CGVector(dx: 10, dy: -5)), CGRect(x: 110, y: 95, width: 200, height: 100))
+        XCTAssertEqual(CaptureGeometry.adjusted(rect, edges: (1, 1), by: CGVector(dx: 50, dy: 20)), CGRect(x: 100, y: 100, width: 250, height: 120))
+        XCTAssertEqual(CaptureGeometry.adjusted(rect, edges: (-1, 0), by: CGVector(dx: 250, dy: 0)), CGRect(x: 300, y: 100, width: 50, height: 100))
+        XCTAssertEqual(CaptureGeometry.adjusted(rect, edges: (1, 0), by: CGVector(dx: 100, dy: 0), ratio: 2), CGRect(x: 100, y: 50, width: 300, height: 150))
+        XCTAssertEqual(CaptureGeometry.adjusted(rect, edges: (0, 1), by: CGVector(dx: 0, dy: 50), ratio: 2), CGRect(x: 100, y: 100, width: 300, height: 150))
+    }
+
+    func testRecordingOptionsKeepTheirStoredKeys() throws {
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: "Glint-options-\(UUID().uuidString)"))
+        XCTAssertEqual(RecordingOptions.saved(defaults).countdown, 3)
+        var options = RecordingOptions()
+        options.mode = .window; options.format = .gif; options.countdown = 5; options.capturesMicrophone = true; options.framesPerSecond = 60
+        options.save(defaults)
+        XCTAssertEqual(defaults.string(forKey: "record.mode"), "Window")
+        XCTAssertEqual(defaults.integer(forKey: "record.countdown"), 5)
+        XCTAssertTrue(defaults.bool(forKey: "record.microphone"))
+        let loaded = RecordingOptions.saved(defaults)
+        XCTAssertEqual(loaded.mode, .window)
+        XCTAssertEqual(loaded.framesPerSecond, 60)
+        XCTAssertEqual(loaded.format, .video)
+    }
+
     func testVerticalStitchPreservesPixelsAndDoesNotAppendUnchangedFrame() throws {
         let page = try pattern(width: 220, height: 950)
         let first = try XCTUnwrap(page.cropping(to: CGRect(x: 0, y: 0, width: 220, height: 420)))
