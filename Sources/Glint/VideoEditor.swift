@@ -20,6 +20,8 @@ final class VideoEditorModel {
     var errorMessage: String?
     var selectedZoom: UUID?
     var pickingZoom: UUID?
+    var panel: VideoInspectorPanel = .background
+    private(set) var frames: [VideoFrame] = []
     private(set) var undoStack: [VideoEdits] = []
     private(set) var redoStack: [VideoEdits] = []
     @ObservationIgnored private var savedEdits: VideoEdits?
@@ -28,6 +30,8 @@ final class VideoEditorModel {
     @ObservationIgnored private var previewTask: Task<Void, Never>?
     @ObservationIgnored private var exportTask: Task<Void, Never>?
     @ObservationIgnored private var loadTask: Task<Void, Never>?
+    @ObservationIgnored private var frameTask: Task<Void, Never>?
+    @ObservationIgnored private var frameDensity = 0
     @ObservationIgnored private var timeObserver: Any?
     @ObservationIgnored private var endObserver: NSObjectProtocol?
     @ObservationIgnored private var scratchDirectories: [URL] = []
@@ -172,9 +176,9 @@ final class VideoEditorModel {
         player.seek(to: CMTime(seconds: currentTime, preferredTimescale: 600), toleranceBefore: .zero, toleranceAfter: .zero)
     }
 
-    func addZoom() {
+    func addZoom(at time: Double? = nil) {
         guard let project else { return }
-        let start = min(max(project.edits.trimStart, sourceTime - 0.3), max(project.edits.trimStart, project.edits.trimEnd - 0.5))
+        let start = min(max(project.edits.trimStart, time ?? sourceTime - 0.3), max(project.edits.trimStart, project.edits.trimEnd - 0.5))
         let zoom = VideoZoom(start: start, duration: min(3, project.edits.trimEnd - start), followsCursor: !project.cursorSamples.isEmpty)
         edit { $0.zooms.append(zoom) }
         selectedZoom = zoom.id
@@ -189,6 +193,12 @@ final class VideoEditorModel {
             zooms.append(VideoZoom(start: start, duration: min(2.7, project.edits.trimEnd - start), center: click.position))
         }
         edit { $0.zooms = zooms }
+    }
+
+    func removeZoom(_ id: UUID) {
+        edit { $0.zooms.removeAll { $0.id == id } }
+        if selectedZoom == id { selectedZoom = nil }
+        if pickingZoom == id { pickingZoom = nil }
     }
 
     func updateZoom(_ id: UUID, _ body: (inout VideoZoom) -> Void) {
@@ -219,6 +229,50 @@ final class VideoEditorModel {
         candidate.edits.cuts.append(range)
         guard candidate.editedDuration >= 0.05 else { errorMessage = "Keep at least one frame in the video."; return }
         edit { $0.cuts.append(range) }
+    }
+
+    func updateCut(_ id: UUID, start: Double, end: Double) {
+        guard let project, start.isFinite, end.isFinite, let index = project.edits.cuts.firstIndex(where: { $0.id == id }) else { return }
+        var candidate = project
+        candidate.edits.cuts[index].start = max(0, start)
+        candidate.edits.cuts[index].end = min(project.duration, max(start, end))
+        guard candidate.editedDuration >= 0.05 else { errorMessage = "Keep at least one frame in the video."; return }
+        edit { $0 = candidate.edits }
+    }
+
+    func loadFrames(tiles: Int) {
+        let density = VideoFrameStrip.density(for: tiles)
+        guard density > frameDensity, let project, let directory else { return }
+        frameDensity = density
+        let cached = Set(frames.map { Int(($0.time * 1000).rounded()) })
+        let times = VideoFrameStrip.times(duration: project.duration, density: density).filter { !cached.contains(Int(($0 * 1000).rounded())) }
+        let url = directory.appendingPathComponent(project.screenFile)
+        let size = CGSize(width: 104 * Double(project.width) / Double(project.height), height: 104)
+        let tolerance = CMTime(seconds: project.duration / Double(density) / 2, preferredTimescale: 600)
+        frameTask?.cancel()
+        frameTask = Task.detached(priority: .utility) { [weak self] in
+            let generator = AVAssetImageGenerator(asset: AVURLAsset(url: url))
+            generator.appliesPreferredTrackTransform = true
+            generator.maximumSize = size
+            generator.requestedTimeToleranceBefore = tolerance; generator.requestedTimeToleranceAfter = tolerance
+            for await result in generator.images(for: times.map { CMTime(seconds: $0, preferredTimescale: 600) }) {
+                if Task.isCancelled { generator.cancelAllCGImageGeneration(); return }
+                guard let image = try? result.image else { continue }
+                await self?.insertFrame(VideoFrame(time: result.requestedTime.seconds, image: image))
+            }
+        }
+    }
+
+    private func insertFrame(_ frame: VideoFrame) {
+        let index = VideoGeometry.lastIndex(in: frames, at: frame.time, timestamp: \.time)
+        if let index, abs(frames[index].time - frame.time) < 0.0005 { return }
+        frames.insert(frame, at: (index ?? -1) + 1)
+    }
+
+    func frame(near time: Double) -> CGImage? {
+        guard let index = VideoGeometry.lastIndex(in: frames, at: time, timestamp: \.time) else { return frames.first?.image }
+        if index + 1 < frames.count, frames[index + 1].time - time < time - frames[index].time { return frames[index + 1].image }
+        return frames[index].image
     }
 
     func chooseBackground() {
@@ -365,7 +419,7 @@ final class VideoEditorModel {
 
     func shutdown() {
         isClosed = true
-        loadTask?.cancel(); previewTask?.cancel(); exportTask?.cancel()
+        loadTask?.cancel(); previewTask?.cancel(); exportTask?.cancel(); frameTask?.cancel()
         player.pause(); player.replaceCurrentItem(with: nil)
         if let timeObserver { player.removeTimeObserver(timeObserver); self.timeObserver = nil }
         if let endObserver { NotificationCenter.default.removeObserver(endObserver); self.endObserver = nil }
@@ -388,17 +442,32 @@ final class VideoEditorWindowController: NSWindowController, NSWindowDelegate, E
 
     init(url: URL, onExport: @escaping (URL) -> Void) {
         model = VideoEditorModel(url: url, onExport: onExport)
-        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1180, height: 780), styleMask: [.titled, .closable, .miniaturizable, .resizable], backing: .buffered, defer: false)
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1180, height: 780), styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView], backing: .buffered, defer: false)
         window.title = "\(url.deletingPathExtension().lastPathComponent) — Glint"
-        window.minSize = NSSize(width: 900, height: 620)
+        window.titleVisibility = .hidden
+        window.titlebarAppearsTransparent = true
+        window.minSize = NSSize(width: 960, height: 640)
         window.contentViewController = NSHostingController(rootView: VideoEditorView(model: model))
         window.isReleasedWhenClosed = false
         super.init(window: window)
         model.window = window
         window.delegate = self
         window.center()
+        centerWindowButtons()
         model.load()
     }
+
+    // appkit pins the window buttons to the default titlebar, so line them up with the taller editor bar
+    private func centerWindowButtons() {
+        guard let window, !window.styleMask.contains(.fullScreen) else { return }
+        for kind in [NSWindow.ButtonType.closeButton, .miniaturizeButton, .zoomButton] {
+            guard let button = window.standardWindowButton(kind), let titlebar = button.superview else { continue }
+            button.setFrameOrigin(NSPoint(x: button.frame.minX, y: titlebar.bounds.height - VideoEditorView.barHeight / 2 - button.frame.height / 2))
+        }
+    }
+
+    func windowDidResize(_ notification: Notification) { centerWindowButtons() }
+    func windowDidExitFullScreen(_ notification: Notification) { centerWindowButtons() }
 
     required init?(coder: NSCoder) { nil }
 
@@ -417,7 +486,7 @@ final class VideoEditorWindowController: NSWindowController, NSWindowDelegate, E
         if model.isSaving || model.isExporting {
             let alert = NSAlert()
             alert.messageText = model.isSaving ? "The project is still saving" : "A video export is still running"
-            alert.informativeText = model.isSaving ? "Wait for the save to finish before closing this window." : "Wait for the export to finish, or cancel it in the progress window."
+            alert.informativeText = model.isSaving ? "Wait for the save to finish before closing this window." : "Wait for the export to finish, or cancel it."
             alert.addButton(withTitle: "OK")
             alert.runModal()
             return false
@@ -444,6 +513,10 @@ struct VideoPlaybackView: NSViewRepresentable {
         let view = AVPlayerView(frame: .zero)
         view.controlsStyle = .none
         view.videoGravity = .resizeAspect
+        view.wantsLayer = true
+        view.layer?.cornerRadius = 8
+        view.layer?.cornerCurve = .continuous
+        view.layer?.masksToBounds = true
         view.player = player
         return view
     }
@@ -462,308 +535,169 @@ struct VideoEditorView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            HStack {
-                Button(action: model.undo) { Image(systemName: "arrow.uturn.backward") }.help("Undo").disabled(model.undoStack.isEmpty).keyboardShortcut("z")
-                Button(action: model.redo) { Image(systemName: "arrow.uturn.forward") }.help("Redo").disabled(model.redoStack.isEmpty).keyboardShortcut("z", modifiers: [.command, .shift])
-                Divider().frame(height: 18)
-                Button("Save Project") { Task { _ = await model.saveProject() } }.keyboardShortcut("s")
-                Menu {
-                    Button("Save As…") { Task { _ = await model.saveProject(asNew: true) } }
-                } label: { Image(systemName: "chevron.down") }.menuStyle(.borderlessButton).fixedSize()
-                Spacer()
-                if model.isSaving { ProgressView().controlSize(.small) }
-                Menu("Export") {
-                    Button("Video (MP4)") { model.export(.mp4) }.keyboardShortcut("e")
-                    Button("Animation (GIF)") { model.export(.gif) }
-                    Divider()
-                    Button("Trim Only…") { model.export(.original) }.help("Keep the original appearance and encoding; only trim and remove sections")
-                }.menuStyle(.borderedButton).disabled(model.project == nil || model.isExporting)
-            }.padding(12).background(.bar)
+            VideoEditorBar(model: model)
             Divider()
             if let project = model.project {
-                HSplitView {
+                HStack(spacing: 0) {
                     VStack(spacing: 0) {
-                        ZStack {
-                            VideoPlaybackView(player: model.player).allowsHitTesting(false)
-                            if let zoom = model.pickingZoom {
-                                GeometryReader { geometry in
-                                    Color.clear.contentShape(Rectangle()).onTapGesture { point in
-                                        model.chooseZoomCenter(zoom, point: point, viewSize: geometry.size)
-                                    }
-                                    .overlay(alignment: .top) {
-                                        Text("Choose the zoom center").padding(8).background(.regularMaterial, in: Capsule()).padding()
-                                    }
-                                }
-                            }
-                            if model.isPreparing { ProgressView().padding().background(.regularMaterial, in: RoundedRectangle(cornerRadius: 10)) }
-                        }.background(.black).frame(minWidth: 480, minHeight: 300)
-                        VideoTimelineView(model: model, project: project)
+                        VideoStage(model: model, project: project)
+                        Divider()
+                        VideoTimelineView(model: model, project: project).disabled(model.isExporting)
                     }
-                    VideoInspectorView(model: model, project: project).frame(minWidth: 290, idealWidth: 310, maxWidth: 360)
+                    Divider()
+                    VideoInspectorView(model: model, project: project).disabled(model.isExporting)
                 }
             } else {
-                Spacer()
-                if model.isPreparing { ProgressView("Opening video…") }
-                else { ContentUnavailableView("Video unavailable", systemImage: "video.slash", description: Text(model.errorMessage ?? "This recording couldn’t be opened.")) }
-                Spacer()
+                ZStack {
+                    Color.backdrop
+                    if model.isPreparing { ProgressView().controlSize(.small) }
+                    else { ContentUnavailableView("Video unavailable", systemImage: "video.slash", description: Text(model.errorMessage ?? "This recording couldn’t be opened.")) }
+                }
             }
         }
-        .sheet(isPresented: $model.isExporting) {
-            VStack(spacing: 18) {
-                Text("Exporting video").font(.headline)
-                ProgressView(value: model.exportProgress).frame(width: 280)
-                Text(model.exportProgress, format: .percent.precision(.fractionLength(0))).monospacedDigit().foregroundStyle(.secondary)
-                Button("Cancel", action: model.cancelExport).keyboardShortcut(.cancelAction)
-            }.padding(30).interactiveDismissDisabled()
-        }
+        .ignoresSafeArea(.container, edges: .top)
+        .tint(.glint)
         .alert("Couldn’t complete the action", isPresented: Binding(get: { model.errorMessage != nil }, set: { if !$0 { model.errorMessage = nil } })) {
             Button("OK", role: .cancel) { model.errorMessage = nil }
         } message: { Text(model.errorMessage ?? "") }
     }
-}
 
-private struct VideoTimelineView: View {
-    @Bindable var model: VideoEditorModel
-    let project: VideoProject
-    @State private var cutStart = 0.0
-    @State private var cutEnd = 1.0
+    static let barHeight: CGFloat = 46
 
-    var body: some View {
-        VStack(spacing: 12) {
-            HStack {
-                Button(action: model.togglePlayback) { Image(systemName: model.isPlaying ? "pause.fill" : "play.fill").frame(width: 18) }.keyboardShortcut(.space, modifiers: [])
-                Text(time(model.currentTime)).monospacedDigit().frame(width: 78)
-                Slider(value: Binding(get: { model.currentTime }, set: { model.seek(to: $0) }), in: 0...max(0.001, model.duration))
-                Text(time(model.duration)).monospacedDigit().frame(width: 78).foregroundStyle(.secondary)
-            }
-            HStack(spacing: 8) {
-                Text("Trim").font(.subheadline.weight(.medium))
-                numberField("Start", value: model.binding(\.trimStart, fallback: 0))
-                Button { model.set(\.trimStart, model.sourceTime) } label: { Image(systemName: "arrow.left.to.line") }.help("Set start at playhead")
-                numberField("End", value: model.binding(\.trimEnd, fallback: project.duration))
-                Button { model.set(\.trimEnd, model.sourceTime) } label: { Image(systemName: "arrow.right.to.line") }.help("Set end at playhead")
-                Spacer()
-                Button("Reset") { model.edit { $0.trimStart = 0; $0.trimEnd = project.duration; $0.cuts = [] } }
-            }
-            HStack(spacing: 8) {
-                Text("Cut").font(.subheadline.weight(.medium)).frame(width: 27, alignment: .leading)
-                numberField("From", value: $cutStart)
-                numberField("To", value: $cutEnd)
-                Button("Remove") { model.removeRange(start: cutStart, end: cutEnd) }
-                Button { cutStart = model.sourceTime; cutEnd = min(project.edits.trimEnd, cutStart + 1) } label: { Image(systemName: "scope") }.help("Start at playhead")
-                Spacer()
-                Button("Add Zoom", action: model.addZoom)
-            }
-            if !project.edits.cuts.isEmpty {
-                ScrollView(.horizontal) {
-                    HStack {
-                        ForEach(project.edits.cuts) { cut in
-                            HStack(spacing: 5) {
-                                Text("\(time(cut.start))–\(time(cut.end))").font(.caption).monospacedDigit()
-                                Button { model.edit { $0.cuts.removeAll { $0.id == cut.id } } } label: { Image(systemName: "xmark.circle.fill") }.buttonStyle(.plain).help("Restore this section")
-                            }.padding(6).background(.quaternary, in: RoundedRectangle(cornerRadius: 6))
-                        }
-                    }
-                }
-            }
-        }.padding(14).background(.bar)
-    }
-
-    private func numberField(_ label: String, value: Binding<Double>) -> some View {
-        HStack(spacing: 4) {
-            Text(label).foregroundStyle(.secondary).font(.caption)
-            TextField(label, value: value, format: .number.precision(.fractionLength(2))).textFieldStyle(.roundedBorder).frame(width: 62)
-        }
-    }
-
-    private func time(_ seconds: Double) -> String {
+    static func clock(_ seconds: Double) -> String {
         let seconds = max(0, seconds.isFinite ? seconds : 0)
         return String(format: "%02d:%05.2f", Int(seconds) / 60, seconds.truncatingRemainder(dividingBy: 60))
     }
 }
 
-private struct VideoInspectorView: View {
+private struct VideoEditorBar: View {
     @Bindable var model: VideoEditorModel
-    let project: VideoProject
-    @State private var customWidth = 1920
-    @State private var customHeight = 1080
 
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 18) {
-                GroupBox("Canvas") {
-                    VStack(alignment: .leading, spacing: 10) {
-                        Picker("Shape", selection: model.binding(\.aspect, fallback: .original)) { ForEach(VideoAspect.allCases) { Text($0.rawValue).tag($0) } }
-                        Picker("Resolution", selection: resolution) {
-                            ForEach([1280, 1920, 2560, 3840], id: \.self) { Text("\($0) px").tag($0) }
-                            Text("Custom").tag(0)
-                        }
-                        if project.edits.customWidth != nil {
-                            HStack {
-                                TextField("Width", value: $customWidth, format: .number).textFieldStyle(.roundedBorder)
-                                Text("×")
-                                TextField("Height", value: $customHeight, format: .number).textFieldStyle(.roundedBorder)
-                                Button("Apply", action: applyCustomSize)
-                            }
-                        }
-                        Toggle("Background", isOn: model.binding(\.showsBackground, fallback: true))
-                        if project.edits.showsBackground {
-                            HStack {
-                                Button("Image…", action: model.chooseBackground)
-                                if project.edits.backgroundFile != nil { Button("Remove") { model.edit { $0.backgroundFile = nil } } }
-                            }
-                            HStack { colorPicker("Top", key: \.backgroundTop); colorPicker("Bottom", key: \.backgroundBottom) }
-                            slider("Padding", key: \.padding, range: 0...200)
-                            slider("Corners", key: \.cornerRadius, range: 0...80)
-                            slider("Shadow", key: \.shadow, range: 0...60)
-                        }
-                    }.padding(5)
-                }
-                GroupBox("Zooms") {
-                    VStack(alignment: .leading, spacing: 10) {
-                        HStack {
-                            Button("Add", action: model.addZoom)
-                            Button("Auto", action: model.smartZooms).disabled(project.clicks.isEmpty).help("Add zooms around clicks")
-                            Spacer()
-                        }
-                        if project.edits.zooms.isEmpty { Text("Draw attention to a detail.").font(.caption).foregroundStyle(.secondary) }
-                        ForEach(project.edits.zooms) { zoom in
-                            VideoZoomRow(model: model, zoom: zoom, duration: project.duration, hasCursor: !project.cursorSamples.isEmpty)
-                        }
-                        slider("Motion blur", key: \.motionBlur, range: 0...1)
-                    }.padding(5)
-                }
-                if !project.cursorSamples.isEmpty {
-                    GroupBox("Cursor") {
-                        VStack(alignment: .leading, spacing: 10) {
-                            Toggle("Show cursor", isOn: model.binding(\.showsCursor, fallback: true))
-                            Picker("Style", selection: model.binding(\.cursorStyle, fallback: .arrow)) { ForEach(VideoCursorStyle.allCases) { Text($0.rawValue).tag($0) } }
-                            Picker("Movement", selection: model.binding(\.cursorMovement, fallback: .smooth)) { ForEach(VideoCursorMovement.allCases) { Text($0.rawValue).tag($0) } }
-                            slider("Size", key: \.cursorScale, range: 0.5...4)
-                            if project.edits.cursorMovement == .smooth { slider("Smoothing", key: \.cursorSmoothing, range: 0...1) }
-                            Toggle("Hide when stationary", isOn: model.binding(\.cursorHideWhenStationary, fallback: false))
-                            Toggle("Hide while typing", isOn: model.binding(\.cursorHideWhileTyping, fallback: false))
-                                .disabled(project.keystrokes.isEmpty).help("Requires keystrokes to have been recorded")
-                            Toggle("Press effect", isOn: model.binding(\.cursorPressEffect, fallback: true))
-                            Toggle("Click ripple", isOn: model.binding(\.showsClicks, fallback: true))
-                            if project.edits.showsClicks {
-                                colorPicker("Click color", key: \.clickColor)
-                                slider("Ripple size", key: \.clickSize, range: 0.25...3)
-                                Toggle("Filled", isOn: model.binding(\.clickFilled, fallback: false))
-                                Toggle("Animate", isOn: model.binding(\.clickAnimated, fallback: true))
-                            }
-                        }.padding(5)
-                    }
-                }
-                if project.cameraFile != nil {
-                    GroupBox("Camera") {
-                        VStack(alignment: .leading, spacing: 10) {
-                            Toggle("Show camera", isOn: model.binding(\.showsCamera, fallback: true))
-                            Toggle("Full screen", isOn: model.binding(\.cameraFullScreen, fallback: false))
-                            Toggle("Smaller during zoom", isOn: model.binding(\.cameraSmallerDuringZoom, fallback: false)).disabled(project.edits.cameraFullScreen)
-                            Picker("Position", selection: model.binding(\.cameraPosition, fallback: .bottomRight)) { ForEach(VideoCameraPosition.allCases) { Text($0.rawValue).tag($0) } }
-                            Picker("Shape", selection: model.binding(\.cameraShape, fallback: .circle)) { ForEach(VideoCameraShape.allCases) { Text($0.rawValue).tag($0) } }
-                            slider("Size", key: \.cameraSize, range: 0.08...0.5)
-                            Toggle("Mirror", isOn: model.binding(\.cameraMirrored, fallback: true))
-                        }.padding(5)
-                    }
-                }
-                if !project.keystrokes.isEmpty {
-                    GroupBox("Keystrokes") {
-                        VStack(alignment: .leading, spacing: 10) {
-                            Toggle("Show keystrokes", isOn: model.binding(\.showsKeystrokes, fallback: true))
-                            Toggle("Shortcuts only", isOn: model.binding(\.keystrokesOnlyShortcuts, fallback: true))
-                            Picker("Position", selection: model.binding(\.keystrokePosition, fallback: .bottom)) { ForEach(VideoKeyPosition.allCases) { Text($0.rawValue).tag($0) } }
-                            Picker("Style", selection: model.binding(\.keystrokeStyle, fallback: .dark)) { ForEach(VideoKeyStyle.allCases) { Text($0.rawValue).tag($0) } }
-                            slider("Size", key: \.keystrokeScale, range: 0.5...2)
-                        }.padding(5)
-                    }
-                }
-                GroupBox("Audio") {
-                    VStack(alignment: .leading, spacing: 10) {
-                        Toggle("Include audio", isOn: model.binding(\.audioEnabled, fallback: true))
-                        slider("System", key: \.systemVolume, range: 0...2)
-                        if project.microphoneAudioTrackID != nil { slider("Microphone", key: \.microphoneVolume, range: 0...2) }
-                    }.padding(5)
-                }
-                GroupBox("Export") {
-                    VStack(alignment: .leading, spacing: 10) {
-                        slider("MP4 quality", key: \.exportQuality, range: 0...1)
-                        Text("About \(ByteCountFormatter.string(fromByteCount: VideoExporter.estimatedSize(project: project), countStyle: .file))").font(.caption).foregroundStyle(.secondary)
-                        Picker("GIF frame rate", selection: $model.gifFrameRate) {
-                            ForEach(Array(Set([5, 10, 15, 20, 25, 30, 50, min(50, project.frameRate)])).filter { $0 <= project.frameRate }.sorted(), id: \.self) { Text("\($0) fps").tag($0) }
-                        }
-                    }.padding(5)
-                }
-            }.padding(14)
-        }.background(Color(nsColor: .controlBackgroundColor))
-        .onAppear { customWidth = project.edits.customWidth ?? Int(VideoGeometry.outputSize(for: project).width); customHeight = project.edits.customHeight ?? Int(VideoGeometry.outputSize(for: project).height) }
-    }
-
-    private func slider(_ title: String, key: WritableKeyPath<VideoEdits, Double>, range: ClosedRange<Double>) -> some View {
-        HStack {
-            Text(title).font(.caption).frame(width: 68, alignment: .leading)
-            Slider(value: model.binding(key, fallback: range.lowerBound), in: range)
-        }
-    }
-
-    private func colorPicker(_ title: String, key: WritableKeyPath<VideoEdits, VideoColor>) -> some View {
-        ColorPicker(title, selection: Binding(get: { Color(nsColor: project.edits[keyPath: key].nsColor) }, set: { model.set(key, VideoColor(NSColor($0))) }), supportsOpacity: false).font(.caption)
-    }
-
-    private var resolution: Binding<Int> {
-        Binding(get: { project.edits.customWidth == nil ? project.edits.maximumDimension : 0 }, set: { value in
-            if value == 0 {
-                let size = VideoGeometry.outputSize(for: project)
-                customWidth = Int(size.width); customHeight = Int(size.height)
-                model.edit { $0.customWidth = customWidth; $0.customHeight = customHeight }
-            } else {
-                model.edit { $0.maximumDimension = value; $0.customWidth = nil; $0.customHeight = nil }
+        HStack(spacing: 8) {
+            HStack(spacing: 2) {
+                Button(action: model.undo) { Image(systemName: "arrow.uturn.backward") }
+                    .help("Undo").disabled(model.undoStack.isEmpty).keyboardShortcut("z")
+                Button(action: model.redo) { Image(systemName: "arrow.uturn.forward") }
+                    .help("Redo").disabled(model.redoStack.isEmpty).keyboardShortcut("z", modifiers: [.command, .shift])
             }
-        })
+            .buttonStyle(ToolButtonStyle())
+            Spacer()
+            if model.isSaving { ProgressView().controlSize(.small) }
+            Menu {
+                Button("Save As…", action: saveAs)
+            } label: { Text("Save") } primaryAction: { save() }
+                .menuStyle(.button).buttonStyle(SecondaryButtonStyle()).fixedSize()
+                .disabled(model.project == nil || model.isSaving)
+            if model.isExporting {
+                HStack(spacing: 8) {
+                    ProgressView(value: model.exportProgress).progressViewStyle(.linear).frame(width: 84)
+                    Text(model.exportProgress, format: .percent.precision(.fractionLength(0)))
+                        .font(.system(size: 12, weight: .medium).monospacedDigit()).frame(width: 34, alignment: .trailing)
+                    Button(action: model.cancelExport) { Image(systemName: "xmark") }
+                        .buttonStyle(ToolButtonStyle(size: CGSize(width: 22, height: 22)))
+                        .help("Cancel export").keyboardShortcut(.cancelAction)
+                }
+                .padding(.leading, 12).padding(.trailing, 3)
+                .frame(height: 28)
+                .background(Capsule().fill(Color.primary.opacity(0.07)))
+            } else {
+                Menu {
+                    Button("MP4") { model.export(.mp4) }
+                    Button("GIF") { model.export(.gif) }
+                    Divider()
+                    Button("Trim Only") { model.export(.original) }
+                } label: { Text("Export") }
+                    .menuStyle(.button).buttonStyle(PrimaryButtonStyle()).fixedSize()
+                    .disabled(model.project == nil || model.isSaving)
+            }
+        }
+        .padding(.leading, 82).padding(.trailing, 14)
+        .frame(height: VideoEditorView.barHeight)
+        .frame(maxWidth: .infinity)
+        .overlay {
+            Text(model.originalURL.deletingPathExtension().lastPathComponent)
+                .font(.system(size: 13, weight: .semibold)).lineLimit(1).truncationMode(.middle)
+                .frame(maxWidth: 360)
+                .allowsHitTesting(false)
+        }
+        .background(.bar)
+        // menus don't take key equivalents, so these carry the shortcuts
+        .background {
+            Group {
+                Button("Save", action: save).keyboardShortcut("s")
+                Button("Save As", action: saveAs).keyboardShortcut("s", modifiers: [.command, .shift])
+                Button("Export") { model.export(.mp4) }.keyboardShortcut("e").disabled(model.isExporting)
+            }
+            .disabled(model.project == nil || model.isSaving)
+            .hidden()
+        }
     }
 
-    private func applyCustomSize() {
-        guard (64...7680).contains(customWidth), (64...7680).contains(customHeight) else {
-            model.errorMessage = "Choose a width and height between 64 and 7680 pixels."
-            return
+    private func save() { Task { _ = await model.saveProject() } }
+    private func saveAs() { Task { _ = await model.saveProject(asNew: true) } }
+}
+
+private struct VideoStage: View {
+    @Bindable var model: VideoEditorModel
+    let project: VideoProject
+
+    var body: some View {
+        let output = VideoGeometry.outputSize(for: project)
+        ZStack {
+            Color.backdrop
+            VideoPlaybackView(player: model.player)
+                .allowsHitTesting(false)
+                .aspectRatio(output, contentMode: .fit)
+                .background(RoundedRectangle(cornerRadius: 8, style: .continuous).fill(.black).shadow(color: .black.opacity(0.22), radius: 18, y: 6))
+                .overlay {
+                    if let zoom = model.pickingZoom {
+                        GeometryReader { geometry in
+                            Color.clear.contentShape(Rectangle())
+                                .onTapGesture { point in model.chooseZoomCenter(zoom, point: point, viewSize: geometry.size) }
+                                .pointerStyle(.rectSelection)
+                        }
+                    }
+                }
+                .padding(.horizontal, 32).padding(.top, 28).padding(.bottom, 76)
+            VStack {
+                if model.pickingZoom != nil {
+                    Island {
+                        Text("Choose zoom center").font(.system(size: 12, weight: .medium)).padding(.leading, 10)
+                        Button { model.pickingZoom = nil } label: { Image(systemName: "xmark") }
+                            .buttonStyle(ToolButtonStyle(size: CGSize(width: 24, height: 24))).help("Cancel").keyboardShortcut(.cancelAction)
+                    }
+                    .padding(.top, 14)
+                }
+                Spacer()
+                VideoTransport(model: model).padding(.bottom, 20)
+            }
+            if model.isPreparing { ProgressView().controlSize(.small).padding(10).background(.regularMaterial, in: Circle()) }
         }
-        customWidth = customWidth / 2 * 2; customHeight = customHeight / 2 * 2
-        model.edit { $0.customWidth = customWidth; $0.customHeight = customHeight }
+        .frame(minHeight: 320)
+        .clipped()
     }
 }
 
-private struct VideoZoomRow: View {
-    @Bindable var model: VideoEditorModel
-    let zoom: VideoZoom
-    let duration: Double
-    let hasCursor: Bool
+private struct VideoTransport: View {
+    let model: VideoEditorModel
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack {
-                Button { model.seek(to: model.project?.outputTime(at: zoom.start + min(0.5, zoom.duration / 2)) ?? 0) } label: { Text(String(format: "%.1fs", zoom.start)).monospacedDigit() }
-                Spacer()
-                Button { model.edit { $0.zooms.removeAll { $0.id == zoom.id } } } label: { Image(systemName: "trash") }.help("Remove zoom")
+        Island {
+            Button { model.seek(to: 0) } label: { Image(systemName: "backward.end.fill") }
+                .help("Go to start")
+                .buttonStyle(ToolButtonStyle(size: CGSize(width: 30, height: 30)))
+            Button(action: model.togglePlayback) { Image(systemName: model.isPlaying ? "pause.fill" : "play.fill").font(.system(size: 16)) }
+                .help(model.isPlaying ? "Pause" : "Play")
+                .buttonStyle(ToolButtonStyle(size: CGSize(width: 34, height: 30)))
+                .keyboardShortcut(.space, modifiers: [])
+            HStack(spacing: 5) {
+                Text(VideoEditorView.clock(model.currentTime)).foregroundStyle(.primary)
+                Text("/").foregroundStyle(.tertiary)
+                Text(VideoEditorView.clock(model.duration)).foregroundStyle(.secondary)
             }
-            HStack {
-                Text("Start").font(.caption)
-                TextField("Start", value: binding(\.start, range: 0...max(0, duration - 0.1)), format: .number.precision(.fractionLength(1))).textFieldStyle(.roundedBorder)
-                Text("Length").font(.caption)
-                TextField("Length", value: binding(\.duration, range: 0.1...max(0.1, duration - zoom.start)), format: .number.precision(.fractionLength(1))).textFieldStyle(.roundedBorder)
-            }
-            HStack { Text("Zoom").font(.caption); Slider(value: binding(\.scale, range: 1...4), in: 1...4); Text(String(format: "%.1f×", zoom.scale)).font(.caption).monospacedDigit() }
-            Toggle("Follow cursor", isOn: Binding(get: { zoom.followsCursor }, set: { value in model.updateZoom(zoom.id) { $0.followsCursor = value } })).disabled(!hasCursor).font(.caption)
-            if !zoom.followsCursor {
-                Button(model.pickingZoom == zoom.id ? "Cancel Selection" : "Choose Center") { model.pickingZoom = model.pickingZoom == zoom.id ? nil : zoom.id }
-            }
-        }.padding(9).background(.quaternary, in: RoundedRectangle(cornerRadius: 8))
-    }
-
-    private func binding(_ key: WritableKeyPath<VideoZoom, Double>, range: ClosedRange<Double>) -> Binding<Double> {
-        Binding(get: { zoom[keyPath: key] }, set: { value in
-            guard value.isFinite else { return }
-            model.updateZoom(zoom.id) { $0[keyPath: key] = min(range.upperBound, max(range.lowerBound, value)) }
-        })
+            .font(.system(size: 12, weight: .medium).monospacedDigit())
+            .padding(.horizontal, 10)
+        }
     }
 }
