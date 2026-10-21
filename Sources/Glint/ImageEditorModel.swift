@@ -20,8 +20,8 @@ final class ImageEditorModel: ObservableObject {
     @Published private(set) var preview: CGImage?
     @Published var selectedIDs: Set<UUID> = []
     @Published var tool: AnnotationTool = .arrow
-    @Published var color = AnnotationColor.coral
-    @Published var lineWidth: Double = 5
+    @Published var color = EditorDefaults.color
+    @Published var lineWidth = EditorDefaults.lineWidth
     @Published var fontSize: Double = 28
     @Published var filled = false
     @Published var bold = true
@@ -35,6 +35,7 @@ final class ImageEditorModel: ObservableObject {
     @Published var canCapture = false
     @Published var canPin = false
     @Published var backgroundPresets: [ImageBackground] = []
+    @Published var showsBackgroundPanel = false
 
     let undoManager = UndoManager()
     let inputURL: URL
@@ -398,7 +399,7 @@ final class ImageEditorModel: ObservableObject {
         }
     }
 
-    private static let presetDirectory = URL.applicationSupportDirectory.appendingPathComponent("Glint/Backgrounds", isDirectory: true)
+    static let presetDirectory = URL.applicationSupportDirectory.appendingPathComponent("Glint/Backgrounds", isDirectory: true)
 
     func applyBackgroundPreset(_ preset: ImageBackground) {
         let request = UUID()

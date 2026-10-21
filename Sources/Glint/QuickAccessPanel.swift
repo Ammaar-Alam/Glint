@@ -37,10 +37,7 @@ final class QuickAccessPanel: NSPanel {
     private var pendingCaptures: [CaptureItem] = []
     private var pendingTimer: Timer?
     private var isCaptureSuppressed = false
-    var onEdit: ((CaptureItem) -> Void)?
-    var onCopy: ((CaptureItem) -> Void)?
-    var onSave: ((CaptureItem) -> Void)?
-    var onPin: ((CaptureItem) -> Void)?
+    var onCommand: ((CaptureCommand, CaptureItem) -> Void)?
     var onHistory: (() -> Void)?
 
     init(library: CaptureLibrary) {
@@ -134,14 +131,19 @@ final class QuickAccessPanel: NSPanel {
         if !shelf.ids.isEmpty { show(); startDismissTimer() }
     }
 
-    private static let cardSize = CGSize(width: 232, height: 146)
+    static let baseCardSize = CGSize(width: 232, height: 146)
+    nonisolated static var cardScale: CGFloat {
+        let value = UserDefaults.standard.double(forKey: "shelfScale")
+        return value > 0 ? min(1.5, max(0.75, value)) : 1
+    }
+    private static var cardSize: CGSize { CGSize(width: (baseCardSize.width * cardScale).rounded(), height: (baseCardSize.height * cardScale).rounded()) }
     private static let gap: CGFloat = 10
     // room for card shadows inside the transparent panel
     private static let inset: CGFloat = 14
 
-    static func cardsThatFit(height: CGFloat, footer: Bool) -> Int {
+    static func cardsThatFit(height: CGFloat, footer: Bool, scale: CGFloat = cardScale) -> Int {
         let footerHeight = footer ? HUDButton.compactHeight + gap : 0
-        let fitting = Int((height - inset * 2 - footerHeight + gap) / (cardSize.height + gap))
+        let fitting = Int((height - inset * 2 - footerHeight + gap) / ((baseCardSize.height * scale).rounded() + gap))
         return max(1, min(4, fitting))
     }
 
@@ -155,7 +157,9 @@ final class QuickAccessPanel: NSPanel {
         let position = UserDefaults.standard.string(forKey: "shelfPosition") ?? "bottomLeft"
         let right = position.contains("Right")
         let bottom = !position.hasPrefix("top")
-        let screen = (isVisible ? self.screen : nil) ?? NSScreen.screens.first(where: { $0.frame.contains(NSEvent.mouseLocation) }) ?? NSScreen.main ?? NSScreen.screens.first
+        let pointer = NSScreen.screens.first(where: { $0.frame.contains(NSEvent.mouseLocation) })
+        let preferred = UserDefaults.standard.bool(forKey: "shelfFollowsPointer") ? pointer : NSScreen.screens.first
+        let screen = (isVisible ? self.screen : nil) ?? preferred ?? NSScreen.main ?? NSScreen.screens.first
         let visible = screen?.visibleFrame ?? CGRect(x: 0, y: 0, width: 1024, height: 768)
         // show only as many cards as the screen fits, the footer opens the rest in history
         let shown = Self.cardsThatFit(height: visible.height, footer: shelf.ids.count > 1)
@@ -204,21 +208,33 @@ final class QuickAccessPanel: NSPanel {
             card.thumbnail.layer?.contentsGravity = .center
         }
         card.thumbnail.setAccessibilityLabel(item.kind == .videoProject ? "\(item.title), click to edit and export" : "\(item.title), drag to share or click to edit")
-        card.thumbnail.onOpen = { [weak self] in self?.interact { self?.onEdit?(item) } }
+        let run: (CaptureCommand) -> Void = { [weak self] command in
+            switch command {
+            case .close: self?.dismiss(item)
+            case .closeAll: self?.dismissAll()
+            default: self?.interact { self?.onCommand?(command, item) }
+            }
+        }
+        card.thumbnail.onOpen = { run(.edit) }
         card.thumbnail.onDrag = { [weak self] dragging in
             self?.isDraggingCapture = dragging
             self?.lastInteraction = Date()
         }
+        card.thumbnail.onDropped = { [weak self] in
+            guard UserDefaults.standard.bool(forKey: "shelfCloseAfterDrag") else { return }
+            Task { @MainActor in self?.dismiss(item) }
+        }
+        card.thumbnail.menu = CaptureCommand.menu(for: item.kind, in: .popup, perform: run)
         var center: [HUDButton] = []
         if item.kind != .videoProject {
-            center.append(HUDButton(title: "Copy") { [weak self] in self?.interact { self?.onCopy?(item) } })
+            center.append(HUDButton(title: "Copy", style: .primary) { run(.copy) })
         }
-        center.append(HUDButton(title: item.kind == .videoProject ? "Export" : "Save") { [weak self] in self?.interact { self?.onSave?(item) } })
+        center.append(HUDButton(title: item.kind == .videoProject ? "Export" : "Save") { run(.saveAs) })
         card.setCenter(center)
-        card.setCorner(.topLeft, HUDButton(symbol: "xmark", help: "Dismiss") { [weak self] in self?.dismiss(item) })
-        card.setCorner(.topRight, HUDButton(symbol: "pencil", help: "Edit") { [weak self] in self?.interact { self?.onEdit?(item) } })
+        card.setCorner(.topLeft, HUDButton(symbol: "xmark", help: "Dismiss") { run(.close) })
+        card.setCorner(.topRight, HUDButton(symbol: "pencil", help: "Edit") { run(.edit) })
         if !item.kind.isVideo {
-            card.setCorner(.bottomLeft, HUDButton(symbol: "pin.fill", help: "Pin") { [weak self] in self?.interact { self?.onPin?(item) } })
+            card.setCorner(.bottomLeft, HUDButton(symbol: "pin.fill", help: "Pin") { run(.pin) })
         }
         return card
     }
@@ -262,9 +278,9 @@ final class QuickAccessPanel: NSPanel {
         if event.keyCode == 53 { dismissAll(); return }
         if event.modifierFlags.contains(.command) {
             switch event.charactersIgnoringModifiers {
-            case "c": onCopy?(item)
-            case "s": onSave?(item)
-            case "e": onEdit?(item)
+            case "c": onCommand?(.copy, item)
+            case "s": onCommand?(.saveAs, item)
+            case "e": onCommand?(.edit, item)
             default: super.keyDown(with: event)
             }
         } else { super.keyDown(with: event) }
@@ -297,7 +313,7 @@ final class QuickAccessCard: NSView {
         thumbnail.frame = bounds
         overlay.frame = bounds
         overlay.wantsLayer = true
-        overlay.layer?.backgroundColor = NSColor.black.withAlphaComponent(0.32).cgColor
+        overlay.layer?.backgroundColor = NSColor.black.withAlphaComponent(0.4).cgColor
         overlay.alphaValue = 0
         clip.addSubview(thumbnail)
         clip.addSubview(overlay)
@@ -308,18 +324,18 @@ final class QuickAccessCard: NSView {
     required init?(coder: NSCoder) { nil }
 
     func setCenter(_ buttons: [HUDButton]) {
-        let width = max(76, buttons.map(\.frame.width).max() ?? 0)
+        let width = max(88, buttons.map(\.frame.width).max() ?? 0)
         for button in buttons { button.setFrameSize(NSSize(width: width, height: button.frame.height)) }
         let stack = NSStackView(views: buttons)
         stack.orientation = .vertical
-        stack.spacing = 6
+        stack.spacing = 8
         stack.setFrameSize(stack.fittingSize)
         stack.setFrameOrigin(NSPoint(x: (bounds.width - stack.frame.width) / 2, y: (bounds.height - stack.frame.height) / 2))
         overlay.addSubview(stack)
     }
 
     func setCorner(_ corner: Corner, _ button: HUDButton) {
-        let inset: CGFloat = 7
+        let inset: CGFloat = 8
         let size = button.frame.size
         let x = corner == .topLeft || corner == .bottomLeft ? inset : bounds.width - size.width - inset
         let y = corner == .bottomLeft || corner == .bottomRight ? inset : bounds.height - size.height - inset
@@ -355,14 +371,19 @@ final class PassthroughView: NSView {
 
 @MainActor
 final class HUDButton: NSButton {
-    static let compactHeight: CGFloat = 22
+    enum Style { case primary, light }
+    static let compactHeight: CGFloat = 24
     private let handler: () -> Void
+    private let style: Style
     private var hovered = false { didSet { updateFill() } }
 
-    init(title: String = "", symbol: String? = nil, help: String? = nil, compact: Bool = false, action: @escaping () -> Void) {
+    // solid fills so buttons read over any capture, dark or light
+    init(title: String = "", symbol: String? = nil, help: String? = nil, style: Style = .light, compact: Bool = false, action: @escaping () -> Void) {
         handler = action
+        self.style = style
         super.init(frame: .zero)
         let label = help ?? title
+        let ink = style == .primary ? Self.resolved(.onGlint) : NSColor(white: 0.1, alpha: 1)
         isBordered = false
         focusRingType = .none
         wantsLayer = true
@@ -372,17 +393,23 @@ final class HUDButton: NSButton {
         setAccessibilityLabel(label)
         if let symbol {
             image = NSImage(systemSymbolName: symbol, accessibilityDescription: label)?
-                .withSymbolConfiguration(.init(pointSize: 10, weight: .bold))
+                .withSymbolConfiguration(.init(pointSize: 12, weight: .semibold))
             imagePosition = .imageOnly
-            contentTintColor = .white
-            setFrameSize(NSSize(width: 24, height: 24))
+            contentTintColor = ink
+            setFrameSize(NSSize(width: 28, height: 28))
         } else {
-            let font = NSFont.systemFont(ofSize: compact ? 11 : 12, weight: .semibold)
-            attributedTitle = NSAttributedString(string: title, attributes: [.font: font, .foregroundColor: NSColor.white])
-            setFrameSize(NSSize(width: ceil(attributedTitle.size().width) + (compact ? 20 : 30), height: compact ? Self.compactHeight : 26))
+            let font = NSFont.systemFont(ofSize: compact ? 12 : 13, weight: .semibold)
+            attributedTitle = NSAttributedString(string: title, attributes: [.font: font, .foregroundColor: ink])
+            setFrameSize(NSSize(width: ceil(attributedTitle.size().width) + (compact ? 22 : 32), height: compact ? Self.compactHeight : 30))
         }
         layer?.cornerRadius = frame.height / 2
         layer?.cornerCurve = .continuous
+        layer?.borderWidth = 0.5
+        layer?.borderColor = NSColor.black.withAlphaComponent(0.15).cgColor
+        layer?.shadowColor = NSColor.black.cgColor
+        layer?.shadowOpacity = 0.25
+        layer?.shadowRadius = 3
+        layer?.shadowOffset = CGSize(width: 0, height: -1)
         updateFill()
         addTrackingArea(NSTrackingArea(rect: .zero, options: [.mouseEnteredAndExited, .activeAlways, .inVisibleRect], owner: self))
     }
@@ -394,8 +421,16 @@ final class HUDButton: NSButton {
     override func mouseExited(with event: NSEvent) { hovered = false }
     @objc private func invoke() { handler() }
 
+    // the popup floats over a dimmed capture, so the bright accent always applies
+    private static func resolved(_ color: NSColor) -> NSColor {
+        var result = color
+        NSAppearance(named: .darkAqua)?.performAsCurrentDrawingAppearance { result = color.usingColorSpace(.sRGB) ?? color }
+        return result
+    }
+
     private func updateFill() {
-        layer?.backgroundColor = NSColor.black.withAlphaComponent(hovered ? 0.8 : 0.58).cgColor
+        let fill = style == .primary ? Self.resolved(.glint) : NSColor(white: 0.97, alpha: 1)
+        layer?.backgroundColor = (hovered ? fill.blended(withFraction: 0.18, of: .white) ?? fill : fill.withAlphaComponent(0.94)).cgColor
     }
 }
 
@@ -405,6 +440,7 @@ final class CaptureDragView: NSView, NSDraggingSource {
     var image: NSImage? { didSet { layer?.contents = image } }
     var onOpen: (() -> Void)?
     var onDrag: ((Bool) -> Void)?
+    var onDropped: (() -> Void)?
     private var downEvent: NSEvent?
     private var startedDragging = false
 
@@ -421,7 +457,19 @@ final class CaptureDragView: NSView, NSDraggingSource {
     required init?(coder: NSCoder) { nil }
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
     override func accessibilityPerformPress() -> Bool { onOpen?(); return true }
-    override func mouseDown(with event: NSEvent) { downEvent = event; startedDragging = false }
+    override func mouseDown(with event: NSEvent) {
+        downEvent = event
+        startedDragging = event.modifierFlags.contains(.control)
+        if startedDragging { rightMouseDown(with: event) }
+    }
+
+    // counts as an interaction so the panel stays up while the menu is open
+    override func rightMouseDown(with event: NSEvent) {
+        guard let menu else { return super.rightMouseDown(with: event) }
+        onDrag?(true)
+        NSMenu.popUpContextMenu(menu, with: event, for: self)
+        onDrag?(false)
+    }
 
     override func mouseDragged(with event: NSEvent) {
         guard !startedDragging, let downEvent, let url,
@@ -441,6 +489,7 @@ final class CaptureDragView: NSView, NSDraggingSource {
     func draggingSession(_ session: NSDraggingSession, sourceOperationMaskFor context: NSDraggingContext) -> NSDragOperation { .copy }
     func draggingSession(_ session: NSDraggingSession, endedAt screenPoint: NSPoint, operation: NSDragOperation) {
         onDrag?(false)
+        if operation != [] { onDropped?() }
         downEvent = nil
         startedDragging = false
     }
