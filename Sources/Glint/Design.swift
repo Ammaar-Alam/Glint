@@ -9,6 +9,13 @@ extension NSColor {
             : NSColor(srgbRed: 0.04, green: 0.58, blue: 0.65, alpha: 1)
     }
 
+    // neutral surface behind a document being edited
+    static let backdrop = NSColor(name: "backdrop") { appearance in
+        appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+            ? NSColor(srgbRed: 0.105, green: 0.11, blue: 0.12, alpha: 1)
+            : NSColor(srgbRed: 0.925, green: 0.93, blue: 0.94, alpha: 1)
+    }
+
     // text and glyphs placed on a glint fill
     static let onGlint = NSColor(name: "onGlint") { appearance in
         appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
@@ -97,4 +104,42 @@ struct Island<Content: View>: View {
             .overlay(RoundedRectangle(cornerRadius: Radius.control + 4, style: .continuous).strokeBorder(Color.primary.opacity(0.08)))
             .shadow(color: .black.opacity(0.12), radius: 8, y: 2)
     }
+}
+
+// a color swatch that edits through the system color panel, a rainbow when there is no single color
+struct ColorWellButton: View {
+    let color: NSColor?
+    let onChange: (NSColor) -> Void
+
+    var body: some View {
+        Button { ColorPanelBridge.shared.open(color ?? .systemRed, onChange: onChange) } label: {
+            Circle()
+                .fill(color.map { AnyShapeStyle(Color(nsColor: $0)) } ?? AnyShapeStyle(AngularGradient(colors: [.red, .yellow, .green, .cyan, .blue, .purple, .red], center: .center)))
+                .overlay(Circle().strokeBorder(Color.primary.opacity(0.2), lineWidth: 0.5))
+                .frame(width: 18, height: 18)
+                .frame(width: 26, height: 28)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .help("Colors")
+    }
+}
+
+@MainActor
+final class ColorPanelBridge: NSObject {
+    static let shared = ColorPanelBridge()
+    private var onChange: ((NSColor) -> Void)?
+
+    func open(_ color: NSColor, onChange: @escaping (NSColor) -> Void) {
+        let panel = NSColorPanel.shared
+        panel.setTarget(nil)
+        panel.showsAlpha = false
+        panel.color = color
+        self.onChange = onChange
+        panel.setTarget(self)
+        panel.setAction(#selector(changed(_:)))
+        panel.orderFront(nil)
+    }
+
+    @objc private func changed(_ panel: NSColorPanel) { onChange?(panel.color) }
 }
