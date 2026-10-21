@@ -505,8 +505,9 @@ private struct InlineOptions: View {
                 if !tools.isDisjoint(with: EditorTools.stroke) { slider(help: "Size") }
                 if !tools.isDisjoint(with: [.blur, .pixelate]) { slider(help: "Strength") }
                 if !tools.isDisjoint(with: [.rectangle, .ellipse]) {
-                    Button { setFilled(!model.filled) } label: { Image(systemName: model.filled ? "square.fill" : "square") }
-                        .buttonStyle(ToolButtonStyle(selected: model.filled)).help("Fill")
+                    Button("Fill") { setFilled(!model.filled) }
+                        .buttonStyle(ToolButtonStyle(selected: model.filled, size: CGSize(width: 40, height: 28)))
+                        .font(.system(size: 12, weight: .medium))
                 }
                 if !tools.isDisjoint(with: [.text, .counter]) { sizeStepper }
                 if tools.contains(.text) {
