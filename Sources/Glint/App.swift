@@ -65,10 +65,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 self?.showRecordingSetup()
             }
         }
-        shelf.onEdit = { [weak self] in self?.edit($0) }
-        shelf.onCopy = { [weak self] in self?.copy($0) }
-        shelf.onSave = { [weak self] in self?.save($0) }
-        shelf.onPin = { [weak self] in self?.pin($0) }
+        shelf.onCommand = { [weak self] in self?.perform($0, on: $1) }
         shelf.onHistory = { [weak self] in self?.showHistory() }
         recorder.onFailure = { [weak self] error in
             guard let self else { return }
@@ -538,6 +535,43 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
     }
 
+    func saveToDesktop(_ item: CaptureItem) {
+        guard let source = item.shareURL(in: library.root) else { edit(item); return }
+        let name = item.title.components(separatedBy: CharacterSet(charactersIn: "/:")).joined(separator: "-")
+        let destination = ExportFile.available(URL.desktopDirectory.appendingPathComponent(name).appendingPathExtension(source.pathExtension))
+        pendingWrites += 1
+        Task {
+            defer { pendingWrites -= 1 }
+            do { try await Task.detached { try ExportFile.copy(source, to: destination) }.value }
+            catch { showError(error) }
+        }
+    }
+
+    func perform(_ command: CaptureCommand, on item: CaptureItem) {
+        // projects reveal and share their flattened render, never the package
+        let file = item.shareURL(in: library.root) ?? item.url(in: library.root)
+        switch command {
+        case .copy: copy(item)
+        case .saveToDesktop: saveToDesktop(item)
+        case .saveAs: save(item)
+        case .edit: edit(item)
+        case .pin: pin(item)
+        case .reveal: NSWorkspace.shared.activateFileViewerSelecting([file])
+        case .copyPath:
+            clipboardTask?.cancel()
+            let clipboard = ClipboardWriter.general
+            clipboard.commit(clipboard.begin()) { _ = $0.setString(file.path, forType: .string) }
+        case .trash:
+            Task {
+                do {
+                    try await library.trash(item)
+                    if shelf.shelf.ids.contains(item.id) { shelf.dismiss(item) }
+                } catch { showError(error) }
+            }
+        case .rename, .close, .closeAll: break
+        }
+    }
+
     func pin(_ item: CaptureItem) {
         Task { [self] in
             do {
@@ -568,10 +602,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     func showHistory() {
         if historyWindow == nil {
-            historyWindow = makeWindow(title: "Glint", size: NSSize(width: 960, height: 640), root: HistoryView(
-                library: library, onEdit: edit, onCopy: copy, onSave: save, onPin: pin, onImport: openFile,
-                onCapture: { [weak self] in self?.takeCapture(.area) }
+            let window = makeWindow(title: "Glint", size: NSSize(width: 1000, height: 680), root: HistoryView(
+                library: library, shortcuts: shortcuts, onCommand: { [weak self] in self?.perform($0, on: $1) }, onImport: openFile,
+                onCapture: { [weak self] in self?.takeCapture(.area) }, onRecord: { [weak self] in self?.showRecordingSetup() }
             ))
+            // an empty unified toolbar only sets the titlebar height, the view draws the bar
+            window.styleMask.insert(.fullSizeContentView)
+            window.titlebarAppearsTransparent = true
+            window.titleVisibility = .hidden
+            window.toolbar = NSToolbar()
+            window.toolbarStyle = .unified
+            historyWindow = window
         }
         historyWindow?.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
@@ -752,6 +793,17 @@ enum ExportFile {
             try? FileManager.default.removeItem(at: temporary)
             throw error
         }
+    }
+
+    // the first free name, numbered the way Finder does
+    static func available(_ url: URL) -> URL {
+        let folder = url.deletingLastPathComponent(), base = url.deletingPathExtension().lastPathComponent
+        var candidate = url, number = 2
+        while FileManager.default.fileExists(atPath: candidate.path) {
+            candidate = folder.appendingPathComponent("\(base) \(number)").appendingPathExtension(url.pathExtension)
+            number += 1
+        }
+        return candidate
     }
 }
 
