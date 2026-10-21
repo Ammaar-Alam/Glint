@@ -34,13 +34,16 @@ struct KeyboardShortcut: Codable, Equatable {
         if modifiers & UInt32(optionKey) != 0 { text += "⌥" }
         if modifiers & UInt32(shiftKey) != 0 { text += "⇧" }
         if modifiers & UInt32(cmdKey) != 0 { text += "⌘" }
-        return text + key.uppercased()
+        return text + (Self.digits[keyCode] ?? key.uppercased())
     }
+
+    // shift turns number keys into symbols, the label should still read 4 not $
+    private static let digits: [UInt32: String] = [18: "1", 19: "2", 20: "3", 21: "4", 23: "5", 22: "6", 26: "7", 28: "8", 25: "9", 29: "0"]
 
     static func from(_ event: NSEvent) -> KeyboardShortcut? {
         let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
         guard !flags.intersection([.command, .control, .option]).isEmpty,
-              let key = event.charactersIgnoringModifiers, !key.isEmpty else { return nil }
+              let key = event.characters(byApplyingModifiers: []) ?? event.charactersIgnoringModifiers, !key.isEmpty else { return nil }
         var modifiers: UInt32 = 0
         if flags.contains(.control) { modifiers |= UInt32(controlKey) }
         if flags.contains(.option) { modifiers |= UInt32(optionKey) }
@@ -64,14 +67,14 @@ final class ShortcutManager {
            let saved = try? JSONDecoder().decode([ShortcutAction: KeyboardShortcut].self, from: data) {
             shortcuts = saved
         } else {
-            let modifiers = UInt32(controlKey | optionKey)
+            let modifiers = UInt32(cmdKey | shiftKey)
+            // the macOS screenshot keys, glint takes them over once the system ones are off
             shortcuts = [
-                .allInOne: .init(keyCode: 23, modifiers: UInt32(cmdKey | shiftKey), key: "5"),
+                .allInOne: .init(keyCode: 23, modifiers: modifiers, key: "5"),
                 .area: .init(keyCode: 21, modifiers: modifiers, key: "4"),
                 .fullScreen: .init(keyCode: 20, modifiers: modifiers, key: "3"),
-                .record: .init(keyCode: 23, modifiers: modifiers, key: "5"),
-                .text: .init(keyCode: 17, modifiers: modifiers, key: "t"),
-                .history: .init(keyCode: 4, modifiers: modifiers, key: "h")
+                .text: .init(keyCode: 19, modifiers: modifiers, key: "2"),
+                .record: .init(keyCode: 22, modifiers: modifiers, key: "6")
             ]
         }
     }
@@ -158,7 +161,12 @@ final class ShortcutButton: NSButton {
 
     init() {
         super.init(frame: .zero)
-        bezelStyle = .rounded
+        isBordered = false
+        focusRingType = .none
+        wantsLayer = true
+        layer?.cornerRadius = 7
+        layer?.cornerCurve = .continuous
+        updateLook()
         target = self
         action = #selector(begin)
         toolTip = "Press a shortcut, Delete to clear, or Escape to cancel"
@@ -168,6 +176,7 @@ final class ShortcutButton: NSButton {
     required init?(coder: NSCoder) { nil }
     @objc private func begin() {
         isRecording = true
+        updateLook()
         title = "Press shortcut…"
         onRecording?(true)
         window?.makeFirstResponder(self)
@@ -192,8 +201,15 @@ final class ShortcutButton: NSButton {
     func finish() {
         guard isRecording else { return }
         isRecording = false
+        updateLook()
         showShortcut()
         onRecording?(false)
+    }
+
+    private func updateLook() {
+        layer?.backgroundColor = (isRecording ? NSColor.glint.withAlphaComponent(0.14) : NSColor.labelColor.withAlphaComponent(0.06)).cgColor
+        layer?.borderWidth = isRecording ? 1 : 0
+        layer?.borderColor = NSColor.glint.cgColor
     }
 
     func showShortcut() {
@@ -203,4 +219,14 @@ final class ShortcutButton: NSButton {
             title = shortcutTitle
         }
     }
+}
+
+enum SystemShortcuts {
+    // macOS screenshot shortcuts, ⇧⌘3, ⇧⌘4 and ⇧⌘5, which win over any app while enabled
+    static var screenshotsEnabled: Bool {
+        guard let hotkeys = CFPreferencesCopyAppValue("AppleSymbolicHotKeys" as CFString, "com.apple.symbolichotkeys" as CFString) as? [String: Any] else { return true }
+        return ["28", "30", "184"].contains { ((hotkeys[$0] as? [String: Any])?["enabled"] as? Bool) ?? true }
+    }
+
+    static let settingsURL = URL(string: "x-apple.systempreferences:com.apple.Keyboard-Settings.extension")!
 }
