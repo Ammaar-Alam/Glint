@@ -66,6 +66,7 @@ final class ShortcutManager {
         } else {
             let modifiers = UInt32(controlKey | optionKey)
             shortcuts = [
+                .allInOne: .init(keyCode: 23, modifiers: UInt32(cmdKey | shiftKey), key: "5"),
                 .area: .init(keyCode: 21, modifiers: modifiers, key: "4"),
                 .fullScreen: .init(keyCode: 20, modifiers: modifiers, key: "3"),
                 .record: .init(keyCode: 23, modifiers: modifiers, key: "5"),
