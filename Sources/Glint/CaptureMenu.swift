@@ -3,14 +3,14 @@ import SwiftUI
 
 // the right-click menu for a capture, shared by popup cards and history
 enum CaptureCommand: Hashable {
-    case copy, saveToDesktop, saveAs, edit, pin, rename, reveal, copyPath, close, closeAll, trash
+    case copy, save, saveAs, edit, pin, rename, reveal, copyPath, close, closeAll, trash
 
     enum Place { case popup, history }
 
     static func sections(for kind: CaptureKind, in place: Place) -> [[CaptureCommand]] {
         // video projects share only through an export
         var sections: [[CaptureCommand]] = [
-            kind == .videoProject ? [.saveAs] : [.copy, .saveToDesktop, .saveAs],
+            kind == .videoProject ? [.saveAs] : [.copy, .save, .saveAs],
             kind.isVideo ? [.edit] : [.edit, .pin],
             [.reveal, .copyPath]
         ]
@@ -23,7 +23,7 @@ enum CaptureCommand: Hashable {
     func title(for kind: CaptureKind) -> String {
         switch self {
         case .copy: "Copy"
-        case .saveToDesktop: "Save to Desktop"
+        case .save: "Save"
         case .saveAs: kind == .videoProject ? "Export…" : "Save As…"
         case .edit: "Edit"
         case .pin: "Pin"
@@ -39,7 +39,7 @@ enum CaptureCommand: Hashable {
     var symbol: String {
         switch self {
         case .copy: "doc.on.doc"
-        case .saveToDesktop: "square.and.arrow.down"
+        case .save: "square.and.arrow.down"
         case .saveAs: "square.and.arrow.down.on.square"
         case .edit: "pencil"
         case .pin: "pin"
