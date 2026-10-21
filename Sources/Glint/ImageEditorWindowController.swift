@@ -351,13 +351,13 @@ private struct ImageEditorView: View {
         }
         .padding(.horizontal, 12)
         .frame(height: 52)
-        .background(.bar)
+        // only the empty bar moves the window, so sliders and menus keep their drags
+        .background { Rectangle().fill(.bar).gesture(WindowDragGesture()) }
         // menu items ignore keyboard shortcuts, so hidden buttons carry them
         .background(Group {
             Button("Print", action: actions.printImage).keyboardShortcut("p", modifiers: .command)
             Button("Copy", action: model.copyImage).keyboardShortcut("c", modifiers: [.command, .shift])
         }.hidden())
-        .gesture(WindowDragGesture())
         .disabled(model.document == nil || model.busy)
     }
 
@@ -556,7 +556,9 @@ private struct InlineOptions: View {
     private func slider(icon: String, help: String) -> some View {
         HStack(spacing: 6) {
             Image(systemName: icon).font(.system(size: 12)).foregroundStyle(.secondary)
-            Slider(value: Binding(get: { model.lineWidth }, set: { setLineWidth($0.rounded()) }), in: 1...40)
+            Slider(value: Binding(get: { model.lineWidth }, set: { setLineWidth($0.rounded()) }), in: 1...40) { editing in
+                if editing { model.beginAdjusting() } else { model.endAdjusting() }
+            }
                 .controlSize(.small)
                 .frame(width: 90)
                 .accessibilityLabel(help)
@@ -820,7 +822,10 @@ private struct BackgroundPanel: View {
                 Spacer()
                 Text("\(Int(value.wrappedValue))").monospacedDigit().foregroundStyle(.secondary)
             }
-            Slider(value: Binding(get: { value.wrappedValue }, set: { value.wrappedValue = $0.rounded() }), in: range).controlSize(.small)
+            Slider(value: Binding(get: { value.wrappedValue }, set: { value.wrappedValue = $0.rounded() }), in: range) { editing in
+                if editing { model.beginAdjusting() } else { model.endAdjusting() }
+            }
+            .controlSize(.small)
         }
     }
 

@@ -139,8 +139,22 @@ final class ImageEditorModel: ObservableObject {
         do { _ = try next.validated() }
         catch { errorMessage = error.localizedDescription; return }
         document = next
-        registerUndo(previous, action: action)
+        if adjustmentStart == nil { registerUndo(previous, action: action) } else { adjustmentAction = action }
         refreshPreview()
+    }
+
+    // a slider drag edits live and becomes one undo step when released
+    private var adjustmentStart: ImageDocument?
+    private var adjustmentAction = ""
+    var isAdjusting: Bool { adjustmentStart != nil }
+
+    func beginAdjusting() { adjustmentStart = document }
+
+    func endAdjusting() {
+        guard let start = adjustmentStart else { return }
+        adjustmentStart = nil
+        if document != start { registerUndo(start, action: adjustmentAction) }
+        canvas?.updateCanvasSize()
     }
 
     func updateGesture(_ next: ImageDocument) {
