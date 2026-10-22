@@ -734,6 +734,7 @@ private struct DragHandle: View {
 
 private struct BackgroundPanel: View {
     @ObservedObject var model: ImageEditorModel
+    @State private var wallpaperRequest: UUID?
 
 
     private static let ratios: [(title: String, ratio: Double)] = [("Auto", 0), ("1:1", 1), ("16:9", 16.0 / 9), ("9:16", 9.0 / 16), ("4:3", 4.0 / 3)]
@@ -766,6 +767,7 @@ private struct BackgroundPanel: View {
                     }
                     ForEach(Array(model.backgroundPresets.enumerated()), id: \.offset) { index, preset in
                         tile(top: preset.color, bottom: preset.gradient ? preset.secondColor : preset.color, selected: background == preset) {
+                            wallpaperRequest = nil
                             model.applyBackgroundPreset(preset)
                         }
                         .overlay(alignment: .bottomTrailing) {
@@ -850,9 +852,13 @@ private struct BackgroundPanel: View {
         next.enabled = true
         next.imageID = Wallpaper.id(index)
         let directory = ImageEditorModel.presetDirectory
+        // a slower first pick must not land after a newer one
+        let token = UUID()
+        wallpaperRequest = token
         Task {
             do {
                 _ = try await Task.detached(priority: .userInitiated) { try Wallpaper.file(index, in: directory) }.value
+                guard wallpaperRequest == token else { return }
                 model.applyBackgroundPreset(next)
             } catch { model.errorMessage = error.localizedDescription }
         }
