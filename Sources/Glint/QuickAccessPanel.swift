@@ -232,7 +232,7 @@ final class QuickAccessPanel: NSPanel {
         center.append(HUDButton(title: item.kind == .videoProject ? "Export" : "Save") { run(.saveAs) })
         card.setCenter(center)
         card.setCorner(.topLeft, HUDButton(symbol: "xmark", help: "Dismiss") { run(.close) })
-        card.setCorner(.topRight, HUDButton(symbol: "pencil", help: "Edit") { run(.edit) })
+        card.setCorner(.topRight, HUDButton(symbol: "square.and.pencil", help: "Edit") { run(.edit) })
         if !item.kind.isVideo {
             card.setCorner(.bottomLeft, HUDButton(symbol: "pin.fill", help: "Pin") { run(.pin) })
         }
