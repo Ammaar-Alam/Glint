@@ -493,6 +493,7 @@ final class ImageEditorModel: ObservableObject {
                 try clipboard.commit(request) {
                     guard $0.setData(data, forType: .png) else { throw GlintError.message("The image couldn’t be copied.") }
                 }
+                Toast.show("Copied")
             } catch { errorMessage = error.localizedDescription }
         }
     }
