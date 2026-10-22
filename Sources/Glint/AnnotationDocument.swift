@@ -132,17 +132,29 @@ struct ImageAnnotation: Codable, Equatable, Identifiable, Sendable {
         var path = points
         if tool == .curvedArrow {
             let control = points.count > 2 ? points[1] : CGPoint(x: end.x, y: start.y)
-            path = (0...24).map { step in
-                let t = CGFloat(step) / 24, u = 1 - t
-                return CGPoint(x: u * u * start.x + 2 * u * t * control.x + t * t * end.x, y: u * u * start.y + 2 * u * t * control.y + t * t * end.y)
+            path = (0...24).map { step -> CGPoint in
+                let t = CGFloat(step) / 24
+                let u: CGFloat = 1 - t
+                let a: CGFloat = u * u, b: CGFloat = 2 * u * t, c: CGFloat = t * t
+                let x: CGFloat = a * start.x + b * control.x + c * end.x
+                let y: CGFloat = a * start.y + b * control.y + c * end.y
+                return CGPoint(x: x, y: y)
             }
         }
         let reach = tolerance + lineWidth / 2
-        return zip(path, path.dropFirst()).contains { a, b in
-            let dx = b.x - a.x, dy = b.y - a.y, length = dx * dx + dy * dy
-            let t = length == 0 ? 0 : max(0, min(1, ((point.x - a.x) * dx + (point.y - a.y) * dy) / length))
-            return hypot(point.x - (a.x + t * dx), point.y - (a.y + t * dy)) <= reach
-        }
+        for index in path.indices.dropFirst() where Self.distance(point, path[index - 1], path[index]) <= reach { return true }
+        return false
+    }
+
+    // split into typed steps so older compilers can check it
+    private static func distance(_ p: CGPoint, _ a: CGPoint, _ b: CGPoint) -> CGFloat {
+        let dx: CGFloat = b.x - a.x
+        let dy: CGFloat = b.y - a.y
+        let length: CGFloat = dx * dx + dy * dy
+        guard length > 0 else { return hypot(p.x - a.x, p.y - a.y) }
+        let projected: CGFloat = ((p.x - a.x) * dx + (p.y - a.y) * dy) / length
+        let t: CGFloat = max(0, min(1, projected))
+        return hypot(p.x - (a.x + t * dx), p.y - (a.y + t * dy))
     }
 
     mutating func move(dx: CGFloat, dy: CGFloat) {
