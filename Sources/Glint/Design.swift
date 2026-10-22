@@ -289,3 +289,71 @@ struct MenuButton<Label: View>: View {
 final class FirstMouseHostingView<Content: View>: NSHostingView<Content> {
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
 }
+
+// a flat switch in the glint accent, replaces the native one everywhere
+struct FlatToggleStyle: ToggleStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        Button { configuration.isOn.toggle() } label: {
+            Capsule()
+                .fill(configuration.isOn ? Color.glint : Color.primary.opacity(0.14))
+                .frame(width: 34, height: 20)
+                .overlay(alignment: configuration.isOn ? .trailing : .leading) {
+                    Circle().fill(.white).shadow(color: .black.opacity(0.18), radius: 1, y: 0.5).padding(2)
+                }
+                .animation(.easeOut(duration: 0.15), value: configuration.isOn)
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(Text(verbatim: ""))
+        .accessibilityValue(configuration.isOn ? "On" : "Off")
+        .accessibilityAddTraits(.isToggle)
+    }
+}
+
+// a flat menu button showing the current choice, checkmarks come from an inline picker inside
+struct FlatMenu<Content: View>: View {
+    let title: String
+    @ViewBuilder var content: Content
+
+    var body: some View {
+        Menu { content } label: {
+            HStack(spacing: 6) {
+                Text(title).font(.system(size: 13))
+                Image(systemName: "chevron.up.chevron.down").font(.system(size: 9, weight: .semibold)).foregroundStyle(.secondary)
+            }
+            .padding(.horizontal, 10)
+            .frame(height: 26)
+            .background(Color.primary.opacity(0.06), in: RoundedRectangle(cornerRadius: Radius.control, style: .continuous))
+            .contentShape(Rectangle())
+        }
+        .menuStyle(.button)
+        .menuIndicator(.hidden)
+        .buttonStyle(.plain)
+        .fixedSize()
+    }
+}
+
+// a choice from a short list as a flat menu
+struct FlatPicker<Value: Hashable>: View {
+    @Binding var selection: Value
+    let options: [(String, Value)]
+
+    var body: some View {
+        FlatMenu(title: options.first { $0.1 == selection }?.0 ?? "") {
+            Picker("", selection: $selection) {
+                ForEach(options, id: \.1) { Text($0.0).tag($0.1) }
+            }
+            .pickerStyle(.inline)
+            .labelsHidden()
+        }
+    }
+}
+
+struct FlatTextFieldStyle: TextFieldStyle {
+    func _body(configuration: TextField<Self._Label>) -> some View {
+        configuration
+            .textFieldStyle(.plain)
+            .padding(.horizontal, 10)
+            .frame(height: 26)
+            .background(Color.primary.opacity(0.06), in: RoundedRectangle(cornerRadius: Radius.control, style: .continuous))
+    }
+}
