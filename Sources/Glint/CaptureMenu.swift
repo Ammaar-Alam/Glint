@@ -41,7 +41,7 @@ enum CaptureCommand: Hashable {
         case .copy: "doc.on.doc"
         case .save: "square.and.arrow.down"
         case .saveAs: "square.and.arrow.down.on.square"
-        case .edit: "pencil"
+        case .edit: "square.and.pencil"
         case .pin: "pin"
         case .rename: "character.cursor.ibeam"
         case .reveal: "folder"

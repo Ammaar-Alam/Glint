@@ -185,7 +185,7 @@ private struct HUDButtonLabel: View {
     var body: some View {
         let fill = primary ? Color.glint : Color(white: 0.97)
         configuration.label
-            .font(.system(size: icon ? 12 : 13, weight: .semibold))
+            .font(.system(size: icon ? 14 : 13, weight: icon ? .heavy : .semibold))
             .labelStyle(.iconOnly)
             .foregroundStyle(primary ? Color.onGlint : Color(white: 0.1))
             .padding(.horizontal, icon ? 0 : 16)
