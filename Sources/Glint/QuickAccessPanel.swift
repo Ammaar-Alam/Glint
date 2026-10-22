@@ -393,10 +393,10 @@ final class HUDButton: NSButton {
         setAccessibilityLabel(label)
         if let symbol {
             image = NSImage(systemSymbolName: symbol, accessibilityDescription: label)?
-                .withSymbolConfiguration(.init(pointSize: 12, weight: .semibold))
+                .withSymbolConfiguration(.init(pointSize: 13, weight: .bold))
             imagePosition = .imageOnly
             contentTintColor = ink
-            setFrameSize(NSSize(width: 28, height: 28))
+            setFrameSize(NSSize(width: 32, height: 32))
         } else {
             let font = NSFont.systemFont(ofSize: compact ? 12 : 13, weight: .semibold)
             attributedTitle = NSAttributedString(string: title, attributes: [.font: font, .foregroundColor: ink])

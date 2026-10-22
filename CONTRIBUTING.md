@@ -4,7 +4,7 @@ Glint is Swift, AppKit and SwiftUI with no third-party dependencies.
 
 ## Setup
 
-macOS 15 and Xcode 16.4 or later.
+macOS 27 and Xcode 27.
 
 ```sh
 swift test
