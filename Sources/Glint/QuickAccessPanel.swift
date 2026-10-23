@@ -234,7 +234,7 @@ final class QuickAccessPanel: NSPanel {
         card.setCorner(.topLeft, HUDButton(symbol: "xmark", help: "Dismiss") { run(.close) })
         card.setCorner(.topRight, HUDButton(symbol: "square.and.pencil", help: "Edit") { run(.edit) })
         if !item.kind.isVideo {
-            card.setCorner(.bottomLeft, HUDButton(symbol: "pin.fill", help: "Pin") { run(.pin) })
+            card.setCorner(.bottomLeft, HUDButton(symbol: "pin.fill", help: "Pin", tilt: -35) { run(.pin) })
         }
         return card
     }
@@ -324,11 +324,11 @@ final class QuickAccessCard: NSView {
     required init?(coder: NSCoder) { nil }
 
     func setCenter(_ buttons: [HUDButton]) {
-        let width = max(88, buttons.map(\.frame.width).max() ?? 0)
+        let width = max(76, buttons.map(\.frame.width).max() ?? 0)
         for button in buttons { button.setFrameSize(NSSize(width: width, height: button.frame.height)) }
         let stack = NSStackView(views: buttons)
         stack.orientation = .vertical
-        stack.spacing = 8
+        stack.spacing = 6
         stack.setFrameSize(stack.fittingSize)
         stack.setFrameOrigin(NSPoint(x: (bounds.width - stack.frame.width) / 2, y: (bounds.height - stack.frame.height) / 2))
         overlay.addSubview(stack)
@@ -378,7 +378,7 @@ final class HUDButton: NSButton {
     private var hovered = false { didSet { updateFill() } }
 
     // solid fills so buttons read over any capture, dark or light
-    init(title: String = "", symbol: String? = nil, help: String? = nil, style: Style = .light, compact: Bool = false, action: @escaping () -> Void) {
+    init(title: String = "", symbol: String? = nil, help: String? = nil, tilt: CGFloat = 0, style: Style = .light, compact: Bool = false, action: @escaping () -> Void) {
         handler = action
         self.style = style
         super.init(frame: .zero)
@@ -393,22 +393,23 @@ final class HUDButton: NSButton {
         setAccessibilityLabel(label)
         if let symbol {
             image = NSImage(systemSymbolName: symbol, accessibilityDescription: label)?
-                .withSymbolConfiguration(.init(pointSize: 14, weight: .heavy))
+                .withSymbolConfiguration(.init(pointSize: 11, weight: .bold))
+                .map { tilt == 0 ? $0 : Self.tilted($0, by: tilt) }
             imagePosition = .imageOnly
             contentTintColor = ink
-            setFrameSize(NSSize(width: 32, height: 32))
+            setFrameSize(NSSize(width: 26, height: 26))
         } else {
-            let font = NSFont.systemFont(ofSize: compact ? 12 : 13, weight: .semibold)
+            let font = NSFont.systemFont(ofSize: 12, weight: .semibold)
             attributedTitle = NSAttributedString(string: title, attributes: [.font: font, .foregroundColor: ink])
-            setFrameSize(NSSize(width: ceil(attributedTitle.size().width) + (compact ? 22 : 32), height: compact ? Self.compactHeight : 30))
+            setFrameSize(NSSize(width: ceil(attributedTitle.size().width) + (compact ? 22 : 30), height: compact ? Self.compactHeight : 27))
         }
         layer?.cornerRadius = frame.height / 2
         layer?.cornerCurve = .continuous
         layer?.borderWidth = 0.5
         layer?.borderColor = NSColor.black.withAlphaComponent(0.15).cgColor
         layer?.shadowColor = NSColor.black.cgColor
-        layer?.shadowOpacity = 0.25
-        layer?.shadowRadius = 3
+        layer?.shadowOpacity = 0.2
+        layer?.shadowRadius = 2.5
         layer?.shadowOffset = CGSize(width: 0, height: -1)
         updateFill()
         addTrackingArea(NSTrackingArea(rect: .zero, options: [.mouseEnteredAndExited, .activeAlways, .inVisibleRect], owner: self))
@@ -420,6 +421,21 @@ final class HUDButton: NSButton {
     override func mouseEntered(with event: NSEvent) { hovered = true }
     override func mouseExited(with event: NSEvent) { hovered = false }
     @objc private func invoke() { handler() }
+
+    // a symbol leaned on its own square canvas so the corners never clip
+    private static func tilted(_ image: NSImage, by degrees: CGFloat) -> NSImage {
+        let side = ceil(max(image.size.width, image.size.height) * 1.15)
+        let result = NSImage(size: NSSize(width: side, height: side), flipped: false) { rect in
+            let transform = NSAffineTransform()
+            transform.translateX(by: rect.midX, yBy: rect.midY)
+            transform.rotate(byDegrees: degrees)
+            transform.concat()
+            image.draw(in: CGRect(x: -image.size.width / 2, y: -image.size.height / 2, width: image.size.width, height: image.size.height))
+            return true
+        }
+        result.isTemplate = true
+        return result
+    }
 
     // the popup floats over a dimmed capture, so the bright accent always applies
     private static func resolved(_ color: NSColor) -> NSColor {

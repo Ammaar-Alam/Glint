@@ -110,7 +110,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         if NSApp.activationPolicy() != policy { NSApp.setActivationPolicy(policy) }
     }
 
-    // the dock icon returns to open windows and only shows home when none are open
+    // the dock icon returns to open windows, opening the app otherwise just leaves it in the menu bar
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
         if !flag { showHome() }
         return true
@@ -118,7 +118,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     // with the menu bar icon hidden, opening the app is the way back to settings
     private func showHome() {
-        if UserDefaults.standard.bool(forKey: "showMenuBarIcon") { showHistory() } else { showSettings() }
+        if !UserDefaults.standard.bool(forKey: "showMenuBarIcon") { showSettings() }
     }
 
     func application(_ sender: NSApplication, openFiles filenames: [String]) {

@@ -891,16 +891,39 @@ private struct SelectionSizeFields: View {
         .onChange(of: model.size, initial: true) { sync() }
     }
 
+    // each box fills with the share of the screen the selection spans, digits roll as it grows
     private func field(_ text: Binding<String>, _ field: Field, label: String) -> some View {
-        TextField(field == .width ? "W" : "H", text: text)
+        let editing = focused == field
+        let screen = (NSScreen.screens.first { $0.frame.contains(NSEvent.mouseLocation) } ?? NSScreen.main)?.frame.size ?? CGSize(width: 1, height: 1)
+        let share = model.size.map { field == .width ? $0.width / screen.width : $0.height / screen.height } ?? 0
+        return TextField("", text: text)
             .textFieldStyle(.plain)
             .multilineTextAlignment(.center)
-            .font(.system(size: 12, weight: .medium).monospacedDigit())
-            .frame(width: 46, height: 22)
-            .background(RoundedRectangle(cornerRadius: Radius.control - 1, style: .continuous)
-                .fill(Color.primary.opacity(focused == field ? 0.12 : 0.06)))
+            .font(.system(size: 12, weight: .semibold).monospacedDigit())
+            .foregroundStyle(editing ? Color.primary : .clear)
+            .frame(width: 50, height: 24)
+            .overlay {
+                if !editing {
+                    Text(verbatim: text.wrappedValue.isEmpty ? "–" : text.wrappedValue)
+                        .font(.system(size: 12, weight: .semibold).monospacedDigit())
+                        .foregroundStyle(text.wrappedValue.isEmpty ? Color.secondary.opacity(0.6) : Color.primary)
+                        .contentTransition(.numericText())
+                        .animation(.easeOut(duration: 0.12), value: text.wrappedValue)
+                        .allowsHitTesting(false)
+                }
+            }
+            .background(alignment: .leading) {
+                GeometryReader { proxy in
+                    ZStack(alignment: .leading) {
+                        Color.primary.opacity(editing ? 0.1 : 0.05)
+                        Color.glint.opacity(0.28).frame(width: proxy.size.width * min(1, max(0, share)))
+                    }
+                }
+                .clipShape(RoundedRectangle(cornerRadius: Radius.control - 1, style: .continuous))
+                .animation(.easeOut(duration: 0.15), value: share)
+            }
             .overlay(RoundedRectangle(cornerRadius: Radius.control - 1, style: .continuous)
-                .strokeBorder(focused == field ? Color.glint : .clear))
+                .strokeBorder(editing ? Color.glint : .clear))
             .focused($focused, equals: field)
             .onChange(of: text.wrappedValue) { if focused == field { model.editedWidth = field == .width } }
             .onSubmit {
