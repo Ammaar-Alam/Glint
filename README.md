@@ -5,6 +5,7 @@ A native macOS app for screenshots, annotation, screen recording, and video edit
 ## Build and run
 
 Requires macOS 15 or later and Xcode with Swift 6.
+Validated with Xcode 27 and Swift 6.4; earlier toolchains have not been checked.
 
 ```sh
 scripts/build-app.sh
