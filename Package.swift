@@ -7,6 +7,7 @@ let package = Package(
     products: [.executable(name: "Clipt", targets: ["Clipt"])],
     targets: [
         .executableTarget(name: "Clipt"),
+        .testTarget(name: "CliptTests", dependencies: ["Clipt"])
     ],
     swiftLanguageModes: [.v5]
 )
