@@ -41,6 +41,14 @@ enum ImageFile {
     static func temporaryURL(extension suffix: String = "png") -> URL {
         FileManager.default.temporaryDirectory.appendingPathComponent("Clipt-\(UUID().uuidString).\(suffix)")
     }
+
+    static func removeTemporary(_ url: URL) throws {
+        let root = FileManager.default.temporaryDirectory.resolvingSymlinksInPath().standardizedFileURL
+        let name = url.deletingPathExtension().lastPathComponent
+        guard url.deletingLastPathComponent().resolvingSymlinksInPath().standardizedFileURL == root,
+              name.hasPrefix("Clipt-"), UUID(uuidString: String(name.dropFirst(6))) != nil else { return }
+        if FileManager.default.fileExists(atPath: url.path) { try FileManager.default.removeItem(at: url) }
+    }
 }
 
 @MainActor
