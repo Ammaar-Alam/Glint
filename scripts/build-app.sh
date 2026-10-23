@@ -16,6 +16,12 @@ install -S -m 644 LICENSE "$bundle/Contents/Resources/LICENSE.txt"
 install -S -m 644 assets/glint-mark.svg "$bundle/Contents/Resources/glint-mark.svg"
 swift scripts/make-icon.swift assets/glint-icon.svg "$PWD/build/AppIcon.iconset"
 iconutil -c icns build/AppIcon.iconset -o "$bundle/Contents/Resources/AppIcon.icns"
-codesign --force --sign "${GLINT_SIGNING_IDENTITY:--}" "$bundle"
+identity="${GLINT_SIGNING_IDENTITY:--}"
+if [[ "$identity" == "-" ]]; then
+    codesign --force --sign - --entitlements Resources/Glint.entitlements "$bundle"
+else
+    # hardened runtime and a timestamp are required for notarization
+    codesign --force --sign "$identity" --options runtime --timestamp --entitlements Resources/Glint.entitlements "$bundle"
+fi
 codesign --verify --strict "$bundle"
 echo "$bundle"
