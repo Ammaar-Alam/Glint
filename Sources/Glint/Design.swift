@@ -48,12 +48,14 @@ enum Radius {
 }
 
 // icon-only toolbar button: quiet at rest, tinted when selected
+// a primary tint suits on/off toggles so the accent stays with the active tool
 struct ToolButtonStyle: ButtonStyle {
     var selected = false
     var size = CGSize(width: 30, height: 28)
+    var tint = Color.glint
 
     func makeBody(configuration: Configuration) -> some View {
-        ToolButtonLabel(configuration: configuration, selected: selected, size: size)
+        ToolButtonLabel(configuration: configuration, selected: selected, size: size, tint: tint)
     }
 }
 
@@ -61,6 +63,7 @@ private struct ToolButtonLabel: View {
     let configuration: ButtonStyle.Configuration
     let selected: Bool
     let size: CGSize
+    let tint: Color
     @State private var hovering = false
     @Environment(\.isEnabled) private var enabled
 
@@ -68,10 +71,10 @@ private struct ToolButtonLabel: View {
         configuration.label
             .font(.system(size: 14, weight: .medium))
             .frame(width: size.width, height: size.height)
-            .foregroundStyle(selected ? Color.glint : Color.primary.opacity(enabled ? 0.85 : 0.3))
+            .foregroundStyle(selected ? tint : Color.primary.opacity(enabled ? 0.85 : 0.3))
             .background(
                 RoundedRectangle(cornerRadius: Radius.control, style: .continuous)
-                    .fill(selected ? Color.glint.opacity(0.16) : Color.primary.opacity(hovering && enabled ? 0.08 : 0))
+                    .fill(selected ? tint.opacity(hovering ? 0.2 : 0.14) : Color.primary.opacity(hovering && enabled ? 0.08 : 0))
             )
             .contentShape(Rectangle())
             .scaleEffect(configuration.isPressed ? 0.94 : 1)
@@ -239,4 +242,47 @@ struct CapsulePicker<Value: Hashable>: View {
         .padding(2)
         .background(Capsule().fill(Color.primary.opacity(0.07)))
     }
+}
+
+// thin vertical rule between groups in a bar
+struct BarDivider: View {
+    var body: some View {
+        Rectangle().fill(Color.primary.opacity(0.12)).frame(width: 1, height: 16).padding(.horizontal, 5)
+    }
+}
+
+// exclusive choices in a quiet track, pair with ToolButtonStyle(selected:size:tint: .primary) at 24 high
+struct Segmented<Content: View>: View {
+    @ViewBuilder var content: Content
+
+    var body: some View {
+        HStack(spacing: 0) { content }
+            .padding(2)
+            .background(RoundedRectangle(cornerRadius: Radius.control + 2, style: .continuous).fill(Color.primary.opacity(0.06)))
+    }
+}
+
+// tool button that opens a native menu, keeping the bar's hover and sizing
+struct MenuButton<Label: View>: View {
+    let help: String
+    var width: CGFloat = 30
+    let items: () -> [NSMenuItem]
+    @ViewBuilder var label: Label
+
+    var body: some View {
+        Button {
+            let menu = NSMenu()
+            menu.autoenablesItems = false
+            items().forEach(menu.addItem)
+            menu.popUp(positioning: nil, at: NSEvent.mouseLocation, in: nil)
+        } label: { label }
+            .buttonStyle(ToolButtonStyle(size: CGSize(width: width, height: 28)))
+            .help(help)
+            .accessibilityLabel(help)
+    }
+}
+
+// floating panels take the first click without the app being frontmost
+final class FirstMouseHostingView<Content: View>: NSHostingView<Content> {
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
 }
