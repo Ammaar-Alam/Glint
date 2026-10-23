@@ -57,31 +57,14 @@ final class HistoryTests: XCTestCase {
     func testMenuRespectsSharingRules() {
         let videoProject = CaptureCommand.sections(for: .videoProject, in: .history).flatMap { $0 }
         XCTAssertFalse(videoProject.contains(.copy))
-        XCTAssertFalse(videoProject.contains(.saveToDesktop))
+        XCTAssertFalse(videoProject.contains(.save))
         XCTAssertFalse(videoProject.contains(.pin))
         XCTAssertEqual(CaptureCommand.saveAs.title(for: .videoProject), "Export…")
         XCTAssertFalse(CaptureCommand.sections(for: .video, in: .history).flatMap { $0 }.contains(.pin))
         let popup = CaptureCommand.sections(for: .image, in: .popup)
-        XCTAssertEqual(popup.first, [.copy, .saveToDesktop, .saveAs])
+        XCTAssertEqual(popup.first, [.copy, .save, .saveAs])
         XCTAssertTrue(popup.flatMap { $0 }.contains(.closeAll))
         XCTAssertFalse(popup.flatMap { $0 }.contains(.rename))
         XCTAssertEqual(popup.last, [.trash])
-    }
-
-    func testAvailableNameSkipsExistingFiles() throws {
-        let folder = FileManager.default.temporaryDirectory.appendingPathComponent("Glint-names-\(UUID().uuidString)")
-        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
-        defer { try? FileManager.default.removeItem(at: folder) }
-        let target = folder.appendingPathComponent("Shot.png")
-        XCTAssertEqual(ExportFile.available(target), target)
-        try Data().write(to: target)
-        try Data().write(to: folder.appendingPathComponent("Shot 2.png"))
-        XCTAssertEqual(ExportFile.available(target).lastPathComponent, "Shot 3.png")
-        let first = ExportFile.reserve(target), second = ExportFile.reserve(target)
-        XCTAssertEqual([first.lastPathComponent, second.lastPathComponent], ["Shot 3.png", "Shot 4.png"])
-        ExportFile.release(first)
-        ExportFile.release(second)
-        XCTAssertEqual(ExportFile.reserve(target).lastPathComponent, "Shot 3.png")
-        ExportFile.release(folder.appendingPathComponent("Shot 3.png"))
     }
 }

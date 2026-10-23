@@ -87,6 +87,8 @@ enum CaptureFolder {
         guard FileManager.default.fileExists(atPath: folder.path, isDirectory: &isDirectory), isDirectory.boolValue else {
             throw GlintError.message("The save folder “\(folder.lastPathComponent)” is no longer available. Choose another in Settings.")
         }
+        // a renamed capture can contain path separators
+        let name = name.components(separatedBy: CharacterSet(charactersIn: "/:")).joined(separator: "-")
         lock.lock()
         defer { lock.unlock() }
         let url = uniqueURL(in: folder, name: name, pathExtension: pathExtension, taken: reserved)
@@ -105,6 +107,13 @@ enum CaptureFolder {
         let destination = try destination(in: folder, name: name, pathExtension: format.type.preferredFilenameExtension ?? format.rawValue)
         defer { release(destination) }
         try writeImage(source, format: format, to: destination)
+        return destination
+    }
+
+    static func saveFile(_ source: URL, named name: String, in folder: URL) throws -> URL {
+        let destination = try destination(in: folder, name: name, pathExtension: source.pathExtension)
+        defer { release(destination) }
+        try ExportFile.copy(source, to: destination)
         return destination
     }
 
