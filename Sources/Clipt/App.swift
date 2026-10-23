@@ -380,7 +380,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 }
             }
             imageEditor.onCapture = { [weak self] in
-                guard let self, self.captureTask == nil, !self.capture.isCapturing, self.recorder.state == .idle else { return nil }
+                guard let self, self.terminationTask == nil, self.captureTask == nil, !self.capture.isCapturing, self.recorder.state == .idle else { return nil }
                 self.pendingWrites += 1
                 defer { self.pendingWrites -= 1 }
                 do { return try await self.captureWithHiddenWindows(.area).map(\.url) }
