@@ -98,6 +98,37 @@ final class VideoTests: XCTestCase {
         XCTAssertThrowsError(try project.validated())
     }
 
+    func testProjectLoadDoesNotDependOnDirectoryURLHint() throws {
+        let root = try Self.directory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let directory = root.appendingPathComponent("capture.cliptvideo", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: false)
+        try Data().write(to: directory.appendingPathComponent("screen.mov"))
+        let project = VideoProject(duration: 1, width: 64, height: 64)
+        try project.save(to: directory)
+        for hint in [true, false] {
+            let url = URL(fileURLWithPath: directory.path, isDirectory: hint)
+            XCTAssertEqual(try VideoProject.load(from: url), project, "directory hint: \(hint)")
+        }
+        let alias = root.appendingPathComponent("alias.cliptvideo", isDirectory: false)
+        try FileManager.default.createSymbolicLink(at: alias, withDestinationURL: directory)
+        XCTAssertEqual(try VideoProject.load(from: alias), project)
+    }
+
+    func testProjectLoadStillRejectsMediaSymlinkOutsidePackage() throws {
+        let root = try Self.directory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let outside = root.appendingPathComponent("outside.mov")
+        try Data().write(to: outside)
+        let directory = root.appendingPathComponent("capture.cliptvideo", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: false)
+        try FileManager.default.createSymbolicLink(at: directory.appendingPathComponent("screen.mov"), withDestinationURL: outside)
+        try VideoProject(duration: 1, width: 64, height: 64).save(to: directory)
+        for hint in [true, false] {
+            XCTAssertThrowsError(try VideoProject.load(from: URL(fileURLWithPath: directory.path, isDirectory: hint)))
+        }
+    }
+
     func testRendererActuallyAppliesBackgroundAndCamera() throws {
         let renderer = VideoFrameRenderer()
         var project = VideoProject(duration: 1, width: 100, height: 60)
