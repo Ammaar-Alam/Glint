@@ -265,6 +265,38 @@ final class ImageEditorTests: XCTestCase {
         weakModel = nil
     }
 
+    @MainActor
+    func testImageInsertionCleansOnlySuccessfulOwnedTemporaryInput() async throws {
+        let sourceURL = ImageFile.temporaryURL()
+        let ownedURL = ImageFile.temporaryURL()
+        let externalURL = ImageFile.temporaryURL()
+        let failedURL = ImageFile.temporaryURL()
+        defer {
+            for url in [sourceURL, ownedURL, externalURL, failedURL] { try? FileManager.default.removeItem(at: url) }
+        }
+        for url in [sourceURL, ownedURL, externalURL] { try ImageFile.write(fixture(width: 20, height: 12), to: url) }
+        let large = try XCTUnwrap(ImageRenderer.bitmap(size: CGSize(width: 100_000, height: 1), scale: 1).makeImage())
+        try ImageFile.write(large, to: failedURL)
+        let model = ImageEditorModel(url: sourceURL, onExport: { _ in })
+        defer { model.shutdown() }
+        for _ in 0..<100 where model.document == nil { try await Task.sleep(for: .milliseconds(20)) }
+        XCTAssertNotNil(model.document)
+        model.addImage(url: ownedURL, ownsTemporary: true)
+        for _ in 0..<100 where model.document?.annotations.count != 1 { try await Task.sleep(for: .milliseconds(20)) }
+        XCTAssertEqual(model.document?.annotations.count, 1)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: ownedURL.path))
+        XCTAssertEqual(pixel(try XCTUnwrap(model.snapshot().insertedImages.values.first), x: 2, y: 1), [20, 10, 128, 255])
+        model.addImage(url: externalURL)
+        for _ in 0..<100 where model.document?.annotations.count != 2 { try await Task.sleep(for: .milliseconds(20)) }
+        XCTAssertEqual(model.document?.annotations.count, 2)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: externalURL.path))
+        model.addImage(url: failedURL, beside: true, ownsTemporary: true)
+        for _ in 0..<100 where model.errorMessage == nil { try await Task.sleep(for: .milliseconds(20)) }
+        XCTAssertNotNil(model.errorMessage)
+        XCTAssertEqual(model.document?.annotations.count, 2)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: failedURL.path))
+    }
+
     func testProjectChecksAssetCountBeforeOpeningAssets() throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("\(UUID().uuidString).clipt")
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
