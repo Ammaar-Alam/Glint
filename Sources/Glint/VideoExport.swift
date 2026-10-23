@@ -66,6 +66,14 @@ enum VideoExporter {
         progress(1)
     }
 
+    // a GIF recording keeps the plain screen at a size GIFs handle well, the project keeps every other choice
+    static func recordingGIF(project directory: URL, destination: URL) async throws {
+        var project = try VideoProject.load(from: directory)
+        project.edits.showsBackground = false
+        project.edits.maximumDimension = max(320, min(project.edits.maximumDimension, 1280, max(project.width, project.height)))
+        try await export(project: project, directory: directory, destination: destination, format: .gif) { _ in }
+    }
+
     private static func encodeMP4(composition: VideoCompositionResult, project: VideoProject, destination: URL,
                                   progress: @escaping @Sendable (Double) -> Void) async throws {
         let reader = try AVAssetReader(asset: composition.asset)
