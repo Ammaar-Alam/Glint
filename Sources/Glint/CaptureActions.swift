@@ -67,10 +67,14 @@ enum CaptureFolder {
         return URL(fileURLWithPath: path, isDirectory: true)
     }
 
-    static func uniqueURL(in folder: URL, name: String, pathExtension: String) -> URL {
+    // names handed out but not written yet, so overlapping saves never share a file
+    private static let lock = NSLock()
+    private static var reserved: Set<String> = []
+
+    static func uniqueURL(in folder: URL, name: String, pathExtension: String, taken: Set<String> = []) -> URL {
         var url = folder.appendingPathComponent(name).appendingPathExtension(pathExtension)
         var index = 2
-        while FileManager.default.fileExists(atPath: url.path) {
+        while FileManager.default.fileExists(atPath: url.path) || taken.contains(url.path) {
             url = folder.appendingPathComponent("\(name) \(index)").appendingPathExtension(pathExtension)
             index += 1
         }
@@ -83,18 +87,34 @@ enum CaptureFolder {
         guard FileManager.default.fileExists(atPath: folder.path, isDirectory: &isDirectory), isDirectory.boolValue else {
             throw GlintError.message("The save folder “\(folder.lastPathComponent)” is no longer available. Choose another in Settings.")
         }
-        return uniqueURL(in: folder, name: name, pathExtension: pathExtension)
+        lock.lock()
+        defer { lock.unlock() }
+        let url = uniqueURL(in: folder, name: name, pathExtension: pathExtension, taken: reserved)
+        reserved.insert(url.path)
+        return url
+    }
+
+    // call once the file is written or the write failed
+    static func release(_ url: URL) {
+        lock.lock()
+        reserved.remove(url.path)
+        lock.unlock()
     }
 
     static func saveImage(_ source: URL, named name: String, format: ScreenshotFormat, in folder: URL) throws -> URL {
         let destination = try destination(in: folder, name: name, pathExtension: format.type.preferredFilenameExtension ?? format.rawValue)
+        defer { release(destination) }
+        try writeImage(source, format: format, to: destination)
+        return destination
+    }
+
+    static func writeImage(_ source: URL, format: ScreenshotFormat, to destination: URL) throws {
         if UTType(filenameExtension: source.pathExtension) == format.type {
             try ExportFile.copy(source, to: destination)
         } else {
             let image = try ImageProject.readImage(source)
             try ImageFile.write(format == .jpeg ? opaque(image) : image, to: destination, type: format.type)
         }
-        return destination
     }
 
     // jpeg has no alpha, so transparent shadows go on white instead of black

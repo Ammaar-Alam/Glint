@@ -681,32 +681,45 @@ private struct Markup: View {
 
     var body: some View {
         GeometryReader { proxy in
-            let size = proxy.size
-            let box = CGRect(x: size.width * 0.58, y: size.height * 0.42, width: size.width * 0.3, height: size.height * 0.34)
-            let start = CGPoint(x: size.width * 0.3, y: size.height * 0.8)
-            let end = CGPoint(x: box.minX - 6, y: box.midY + 4)
-            let angle = atan2(end.y - start.y, end.x - start.x)
-            let head = 7 + width * 1.6
+            let shape = MarkupShape(size: proxy.size, width: CGFloat(width))
             ZStack {
                 RoundedRectangle(cornerRadius: 3, style: .continuous)
                     .stroke(color, lineWidth: width)
-                    .frame(width: box.width, height: box.height)
-                    .position(x: box.midX, y: box.midY)
-                Path { path in
-                    path.move(to: start)
-                    path.addLine(to: CGPoint(x: end.x - cos(angle) * head * 0.6, y: end.y - sin(angle) * head * 0.6))
-                }
-                .stroke(color, style: StrokeStyle(lineWidth: width, lineCap: .round))
-                Path { path in
-                    path.move(to: end)
-                    path.addLine(to: CGPoint(x: end.x - cos(angle - 0.45) * head, y: end.y - sin(angle - 0.45) * head))
-                    path.addLine(to: CGPoint(x: end.x - cos(angle + 0.45) * head, y: end.y - sin(angle + 0.45) * head))
-                    path.closeSubpath()
-                }
-                .fill(color)
+                    .frame(width: shape.box.width, height: shape.box.height)
+                    .position(x: shape.box.midX, y: shape.box.midY)
+                shape.shaft.stroke(color, style: StrokeStyle(lineWidth: width, lineCap: .round))
+                shape.head.fill(color)
             }
         }
         .animation(.easeOut(duration: 0.12), value: width)
+    }
+}
+
+// kept out of the view builder, the Xcode 16.4 compiler crashes on it there
+private struct MarkupShape {
+    let box: CGRect
+    let shaft: Path
+    let head: Path
+
+    init(size: CGSize, width: CGFloat) {
+        box = CGRect(x: size.width * 0.58, y: size.height * 0.42, width: size.width * 0.3, height: size.height * 0.34)
+        let start = CGPoint(x: size.width * 0.3, y: size.height * 0.8)
+        let end = CGPoint(x: box.minX - 6, y: box.midY + 4)
+        let angle = atan2(end.y - start.y, end.x - start.x)
+        let length: CGFloat = 7 + width * 1.6
+        func point(_ offset: CGFloat, _ distance: CGFloat) -> CGPoint {
+            CGPoint(x: end.x - cos(angle + offset) * distance, y: end.y - sin(angle + offset) * distance)
+        }
+        var shaft = Path()
+        shaft.move(to: start)
+        shaft.addLine(to: point(0, length * 0.6))
+        self.shaft = shaft
+        var head = Path()
+        head.move(to: end)
+        head.addLine(to: point(-0.45, length))
+        head.addLine(to: point(0.45, length))
+        head.closeSubpath()
+        self.head = head
     }
 }
 

@@ -130,4 +130,18 @@ final class SettingsTests: XCTestCase {
         // 14 * 2 inset, two 219 point cards and the footer stay inside 700 points
         XCTAssertLessThanOrEqual(14 * 2 + 2 * 219 + 10 + 24 + 10, 700)
     }
+
+    func testFolderDestinationsAreReservedUntilWritten() throws {
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let first = try CaptureFolder.destination(in: folder, name: "Shot", pathExtension: "mp4")
+        let second = try CaptureFolder.destination(in: folder, name: "Shot", pathExtension: "mp4")
+        XCTAssertEqual(first.lastPathComponent, "Shot.mp4")
+        XCTAssertEqual(second.lastPathComponent, "Shot 2.mp4")
+        CaptureFolder.release(first)
+        CaptureFolder.release(second)
+        XCTAssertEqual(try CaptureFolder.destination(in: folder, name: "Shot", pathExtension: "mp4").lastPathComponent, "Shot.mp4")
+        CaptureFolder.release(folder.appendingPathComponent("Shot.mp4"))
+    }
 }
