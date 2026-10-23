@@ -33,6 +33,7 @@ extension Color {
     static let glint = Color(nsColor: .glint)
     static let onGlint = Color(nsColor: .onGlint)
     static let groupFill = Color(nsColor: .groupFill)
+    static let backdrop = Color(nsColor: .backdrop)
 }
 
 enum Radius {
