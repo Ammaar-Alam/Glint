@@ -35,6 +35,7 @@ final class ImageEditorModel: ObservableObject {
     @Published var canCapture = false
     @Published var canPin = false
     @Published var backgroundPresets: [ImageBackground] = []
+    @Published var showsBackgroundPanel = false
 
     let undoManager = UndoManager()
     let inputURL: URL
