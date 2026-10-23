@@ -37,10 +37,7 @@ final class QuickAccessPanel: NSPanel {
     private var pendingCaptures: [CaptureItem] = []
     private var pendingTimer: Timer?
     private var isCaptureSuppressed = false
-    var onEdit: ((CaptureItem) -> Void)?
-    var onCopy: ((CaptureItem) -> Void)?
-    var onSave: ((CaptureItem) -> Void)?
-    var onPin: ((CaptureItem) -> Void)?
+    var onCommand: ((CaptureCommand, CaptureItem) -> Void)?
     var onHistory: (() -> Void)?
 
     init(library: CaptureLibrary) {
@@ -211,7 +208,14 @@ final class QuickAccessPanel: NSPanel {
             card.thumbnail.layer?.contentsGravity = .center
         }
         card.thumbnail.setAccessibilityLabel(item.kind == .videoProject ? "\(item.title), click to edit and export" : "\(item.title), drag to share or click to edit")
-        card.thumbnail.onOpen = { [weak self] in self?.interact { self?.onEdit?(item) } }
+        let run: (CaptureCommand) -> Void = { [weak self] command in
+            switch command {
+            case .close: self?.dismiss(item)
+            case .closeAll: self?.dismissAll()
+            default: self?.interact { self?.onCommand?(command, item) }
+            }
+        }
+        card.thumbnail.onOpen = { run(.edit) }
         card.thumbnail.onDrag = { [weak self] dragging in
             self?.isDraggingCapture = dragging
             self?.lastInteraction = Date()
@@ -220,16 +224,17 @@ final class QuickAccessPanel: NSPanel {
             guard UserDefaults.standard.bool(forKey: "shelfCloseAfterDrag") else { return }
             Task { @MainActor in self?.dismiss(item) }
         }
+        card.thumbnail.menu = CaptureCommand.menu(for: item.kind, in: .popup, perform: run)
         var center: [HUDButton] = []
         if item.kind != .videoProject {
-            center.append(HUDButton(title: "Copy", style: .primary) { [weak self] in self?.interact { self?.onCopy?(item) } })
+            center.append(HUDButton(title: "Copy", style: .primary) { run(.copy) })
         }
-        center.append(HUDButton(title: item.kind == .videoProject ? "Export" : "Save") { [weak self] in self?.interact { self?.onSave?(item) } })
+        center.append(HUDButton(title: item.kind == .videoProject ? "Export" : "Save") { run(.saveAs) })
         card.setCenter(center)
-        card.setCorner(.topLeft, HUDButton(symbol: "xmark", help: "Dismiss") { [weak self] in self?.dismiss(item) })
-        card.setCorner(.topRight, HUDButton(symbol: "pencil", help: "Edit") { [weak self] in self?.interact { self?.onEdit?(item) } })
+        card.setCorner(.topLeft, HUDButton(symbol: "xmark", help: "Dismiss") { run(.close) })
+        card.setCorner(.topRight, HUDButton(symbol: "pencil", help: "Edit") { run(.edit) })
         if !item.kind.isVideo {
-            card.setCorner(.bottomLeft, HUDButton(symbol: "pin.fill", help: "Pin") { [weak self] in self?.interact { self?.onPin?(item) } })
+            card.setCorner(.bottomLeft, HUDButton(symbol: "pin.fill", help: "Pin") { run(.pin) })
         }
         return card
     }
@@ -273,9 +278,9 @@ final class QuickAccessPanel: NSPanel {
         if event.keyCode == 53 { dismissAll(); return }
         if event.modifierFlags.contains(.command) {
             switch event.charactersIgnoringModifiers {
-            case "c": onCopy?(item)
-            case "s": onSave?(item)
-            case "e": onEdit?(item)
+            case "c": onCommand?(.copy, item)
+            case "s": onCommand?(.saveAs, item)
+            case "e": onCommand?(.edit, item)
             default: super.keyDown(with: event)
             }
         } else { super.keyDown(with: event) }
@@ -452,7 +457,19 @@ final class CaptureDragView: NSView, NSDraggingSource {
     required init?(coder: NSCoder) { nil }
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
     override func accessibilityPerformPress() -> Bool { onOpen?(); return true }
-    override func mouseDown(with event: NSEvent) { downEvent = event; startedDragging = false }
+    override func mouseDown(with event: NSEvent) {
+        downEvent = event
+        startedDragging = event.modifierFlags.contains(.control)
+        if startedDragging { rightMouseDown(with: event) }
+    }
+
+    // counts as an interaction so the panel stays up while the menu is open
+    override func rightMouseDown(with event: NSEvent) {
+        guard let menu else { return super.rightMouseDown(with: event) }
+        onDrag?(true)
+        NSMenu.popUpContextMenu(menu, with: event, for: self)
+        onDrag?(false)
+    }
 
     override func mouseDragged(with event: NSEvent) {
         guard !startedDragging, let downEvent, let url,

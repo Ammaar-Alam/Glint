@@ -27,6 +27,11 @@ extension NSColor {
     static let groupFill = NSColor(name: "groupFill") { appearance in
         appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua ? NSColor(white: 1, alpha: 0.05) : NSColor(white: 0, alpha: 0.035)
     }
+
+    // a control lifted off a recessed track
+    static let raisedControl = NSColor(name: "raisedControl") { appearance in
+        appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua ? NSColor(white: 1, alpha: 0.16) : .white
+    }
 }
 
 extension Color {
@@ -148,4 +153,89 @@ final class ColorPanelBridge: NSObject {
     }
 
     @objc private func changed(_ panel: NSColorPanel) { onChange?(panel.color) }
+}
+
+// solid buttons over a dimmed capture, matching the popup card actions
+struct HUDButtonStyle: ButtonStyle {
+    var primary = false
+    var icon = false
+
+    func makeBody(configuration: Configuration) -> some View {
+        HUDButtonLabel(configuration: configuration, primary: primary, icon: icon)
+            .environment(\.colorScheme, .dark)
+    }
+}
+
+private struct HUDButtonLabel: View {
+    let configuration: ButtonStyle.Configuration
+    let primary: Bool
+    let icon: Bool
+    @State private var hovering = false
+
+    var body: some View {
+        let fill = primary ? Color.glint : Color(white: 0.97)
+        configuration.label
+            .font(.system(size: icon ? 12 : 13, weight: .semibold))
+            .labelStyle(.iconOnly)
+            .foregroundStyle(primary ? Color.onGlint : Color(white: 0.1))
+            .padding(.horizontal, icon ? 0 : 16)
+            .frame(minWidth: icon ? 28 : 88, minHeight: icon ? 28 : 30)
+            .background(Capsule().fill(hovering ? fill.mix(with: .white, by: 0.18) : fill.opacity(0.94)))
+            .overlay(Capsule().strokeBorder(Color.black.opacity(0.15), lineWidth: 0.5))
+            .shadow(color: .black.opacity(0.25), radius: 1.5, y: 1)
+            .contentShape(Capsule())
+            .scaleEffect(configuration.isPressed ? 0.96 : 1)
+            .onHover { hovering = $0 }
+    }
+}
+
+// one key of a shortcut
+struct Keycap: View {
+    let key: String
+
+    var body: some View {
+        Text(key)
+            .font(.system(size: 12, weight: .medium))
+            .frame(minWidth: 24, minHeight: 24)
+            .padding(.horizontal, key.count > 1 ? 6 : 0)
+            .background(RoundedRectangle(cornerRadius: 6, style: .continuous).fill(Color.primary.opacity(0.06)))
+            .overlay(RoundedRectangle(cornerRadius: 6, style: .continuous).strokeBorder(Color.primary.opacity(0.12), lineWidth: 0.5))
+            .shadow(color: .black.opacity(0.08), radius: 0, y: 1)
+    }
+}
+
+// capsule segmented control with a sliding selection
+struct CapsulePicker<Value: Hashable>: View {
+    @Binding var selection: Value
+    let options: [Value]
+    let title: (Value) -> String
+    @Namespace private var namespace
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    var body: some View {
+        HStack(spacing: 0) {
+            ForEach(options, id: \.self) { option in
+                let selected = option == selection
+                Button { withAnimation(reduceMotion ? nil : .easeOut(duration: 0.2)) { selection = option } } label: {
+                    Text(title(option))
+                        .font(.system(size: 12, weight: selected ? .semibold : .medium))
+                        .foregroundStyle(selected ? Color.primary : Color.secondary)
+                        .padding(.horizontal, 12)
+                        .frame(height: 24)
+                        .background {
+                            if selected {
+                                Capsule().fill(Color(nsColor: .raisedControl))
+                                    .shadow(color: .black.opacity(0.12), radius: 1.5, y: 1)
+                                    .matchedGeometryEffect(id: "selection", in: namespace)
+                            }
+                        }
+                        .contentShape(Capsule())
+                }
+                .buttonStyle(.plain)
+                .accessibilityAddTraits(selected ? .isSelected : [])
+            }
+        }
+        .padding(2)
+        .background(Capsule().fill(Color.primary.opacity(0.07)))
+    }
 }
