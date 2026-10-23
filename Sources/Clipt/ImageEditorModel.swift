@@ -458,8 +458,8 @@ final class ImageEditorModel: ObservableObject {
     func copyImage() {
         guard !busy, !isClosed else { return }
         canvas?.commitEditing()
-        let pasteboard = NSPasteboard.general
-        let changeCount = pasteboard.changeCount
+        let clipboard = ClipboardWriter.general
+        let request = clipboard.begin()
         busy = true
         status = "Copying…"
         Task {
@@ -469,10 +469,9 @@ final class ImageEditorModel: ObservableObject {
                 let data = try await Task.detached(priority: .userInitiated) {
                     try Self.pngData(ImageRenderer.render(contents))
                 }.value
-                guard !Task.isCancelled, !isClosed, pasteboard.changeCount == changeCount else { return }
-                pasteboard.clearContents()
-                guard pasteboard.setData(data, forType: .png) else {
-                    throw CliptError.message("The image couldn’t be copied.")
+                guard !Task.isCancelled, !isClosed else { return }
+                try clipboard.commit(request) {
+                    guard $0.setData(data, forType: .png) else { throw CliptError.message("The image couldn’t be copied.") }
                 }
             } catch { errorMessage = error.localizedDescription }
         }
@@ -494,8 +493,8 @@ final class ImageEditorModel: ObservableObject {
         guard !selectedAnnotations.isEmpty else { copyImage(); return }
         guard !busy, !isClosed else { return }
         let snapshot = ImageClipboardContents(annotations: selectedAnnotations, images: insertedImages)
-        let pasteboard = NSPasteboard.general
-        let changeCount = pasteboard.changeCount
+        let clipboard = ClipboardWriter.general
+        let request = clipboard.begin()
         busy = true
         Task {
             defer { busy = false }
@@ -507,11 +506,12 @@ final class ImageEditorModel: ObservableObject {
                     }
                     return try JSONEncoder().encode(ImageAnnotationClipboard(annotations: snapshot.annotations, images: images))
                 }.value
-                guard !Task.isCancelled, !isClosed, pasteboard.changeCount == changeCount else { return }
-                pasteboard.clearContents()
-                guard pasteboard.setData(data, forType: Self.annotationsPasteboardType) else {
-                    throw CliptError.message("The selection couldn’t be copied.")
-                }
+                guard !Task.isCancelled, !isClosed else { return }
+                guard try clipboard.commit(request, writing: {
+                    guard $0.setData(data, forType: Self.annotationsPasteboardType) else {
+                        throw CliptError.message("The selection couldn’t be copied.")
+                    }
+                }) else { return }
                 if cut {
                     let copiedIDs = Set(snapshot.annotations.map(\.id))
                     mutate("Cut") { $0.annotations.removeAll { copiedIDs.contains($0.id) } }
