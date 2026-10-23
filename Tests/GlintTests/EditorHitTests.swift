@@ -54,4 +54,14 @@ final class EditorHitTests: XCTestCase {
         XCTAssertEqual(wide.maxX, 400, accuracy: 0.001)
         XCTAssertEqual(wide.maxY, 300, accuracy: 0.001)
     }
+
+    func testSelectingAnArrowAdoptsItsStyle() async throws {
+        let editor = try await openEditor()
+        defer { editor.model.shutdown(); editor.window?.orderOut(nil) }
+        editor.model.arrowStyle = .tapered
+        let legacy = ImageAnnotation(tool: .arrow, rect: .zero, points: [CGPoint(x: 10, y: 10), CGPoint(x: 90, y: 60)])
+        editor.model.mutate("Add") { $0.annotations.append(legacy) }
+        editor.model.select(legacy.id)
+        XCTAssertEqual(editor.model.arrowStyle, .open)
+    }
 }
