@@ -53,9 +53,11 @@ struct ToolButtonStyle: ButtonStyle {
     var selected = false
     var size = CGSize(width: 30, height: 28)
     var tint = Color.glint
+    // a solid fill for the one active tool in a strip
+    var prominent = false
 
     func makeBody(configuration: Configuration) -> some View {
-        ToolButtonLabel(configuration: configuration, selected: selected, size: size, tint: tint)
+        ToolButtonLabel(configuration: configuration, selected: selected, size: size, tint: tint, prominent: prominent)
     }
 }
 
@@ -64,6 +66,7 @@ private struct ToolButtonLabel: View {
     let selected: Bool
     let size: CGSize
     let tint: Color
+    let prominent: Bool
     @State private var hovering = false
     @Environment(\.isEnabled) private var enabled
 
@@ -71,10 +74,10 @@ private struct ToolButtonLabel: View {
         configuration.label
             .font(.system(size: 14, weight: .medium))
             .frame(width: size.width, height: size.height)
-            .foregroundStyle(selected ? tint : Color.primary.opacity(enabled ? 0.85 : 0.3))
+            .foregroundStyle(selected ? (prominent ? Color.white : tint) : Color.primary.opacity(enabled ? 0.85 : 0.3))
             .background(
                 RoundedRectangle(cornerRadius: Radius.control, style: .continuous)
-                    .fill(selected ? tint.opacity(hovering ? 0.2 : 0.14) : Color.primary.opacity(hovering && enabled ? 0.08 : 0))
+                    .fill(selected ? (prominent ? tint : tint.opacity(hovering ? 0.2 : 0.14)) : Color.primary.opacity(hovering && enabled ? 0.08 : 0))
             )
             .contentShape(Rectangle())
             .scaleEffect(configuration.isPressed ? 0.94 : 1)

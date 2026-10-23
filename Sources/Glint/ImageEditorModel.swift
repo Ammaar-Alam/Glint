@@ -235,6 +235,11 @@ final class ImageEditorModel: ObservableObject {
         }
     }
 
+    func setColor(_ color: AnnotationColor) {
+        self.color = color
+        changeStyle { $0.color = color }
+    }
+
     func changeStyle(_ update: (inout ImageAnnotation) -> Void) {
         guard !selectedIDs.isEmpty else { return }
         mutate("Change Style") { document in
