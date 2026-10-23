@@ -302,7 +302,11 @@ private struct ImageEditorView: View {
                 ForEach(group) { tool in
                     Button {
                         if tool == .image { model.importImage() }
-                        else { model.tool = tool; model.canvas?.window?.makeFirstResponder(model.canvas) }
+                        else {
+                            if tool == .crop { model.select(nil) }
+                            model.tool = tool
+                            model.canvas?.window?.makeFirstResponder(model.canvas)
+                        }
                     } label: { Image(systemName: tool.symbol) }
                     .buttonStyle(ToolButtonStyle(selected: model.tool == tool))
                     .help(tool.title + (tool.keyboardKey.map { "  \($0.uppercased())" } ?? ""))
@@ -401,16 +405,19 @@ private struct ToolOptions: View {
         model.selectedIDs.isEmpty ? [model.tool] : Set(model.selectedAnnotations.map(\.tool))
     }
 
+    private static let strengthTools: Set<AnnotationTool> = [.pixelate, .blur]
+
     static func isVisible(for model: ImageEditorModel) -> Bool {
         if model.tool == .crop || !model.selectedIDs.isEmpty { return true }
-        return colorTools.contains(model.tool)
+        return colorTools.contains(model.tool) || strengthTools.contains(model.tool)
     }
 
     var body: some View {
         Island {
-            if model.tool == .crop && model.selectedIDs.isEmpty { cropOptions } else {
+            if model.tool == .crop { cropOptions } else {
                 if !tools.isDisjoint(with: Self.colorTools) { swatches }
                 if !tools.isDisjoint(with: Self.strokeTools) { separator; strokeOptions }
+                if !tools.isDisjoint(with: Self.strengthTools) { strengthOptions }
                 if !tools.isDisjoint(with: [.rectangle, .ellipse]) {
                     Button { setFilled(!model.filled) } label: { Image(systemName: model.filled ? "square.fill" : "square") }
                         .buttonStyle(ToolButtonStyle(selected: model.filled)).help("Fill")
@@ -467,6 +474,22 @@ private struct ToolOptions: View {
                         .frame(width: 180).padding(14)
                 }
         }
+    }
+
+    // line width drives pixel size and blur radius
+    private var strengthOptions: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "circle.dotted").foregroundStyle(.secondary)
+            Slider(value: Binding(get: { model.lineWidth }, set: { setLineWidth($0.rounded()) }), in: 1...40)
+                .controlSize(.small)
+                .frame(width: 140)
+                .accessibilityLabel("Strength")
+            Image(systemName: "circle.grid.3x3.fill").foregroundStyle(.secondary)
+        }
+        .font(.system(size: 12))
+        .padding(.horizontal, 8)
+        .frame(height: 28)
+        .help("Strength")
     }
 
     private var textOptions: some View {
