@@ -188,8 +188,11 @@ private struct TimelineRuler: View {
                     guard minorTime < scale.duration else { break }
                     context.fill(Path(CGRect(x: scale.x(minorTime) - offset - 0.5, y: size.height - 3, width: 1, height: 3)), with: .color(.secondary.opacity(0.35)))
                 }
-                if x + 30 < size.width { context.draw(Text(Self.label(time, step: step)).font(.system(size: 10, weight: .medium).monospacedDigit()).foregroundStyle(.secondary),
-                             at: CGPoint(x: x + 4, y: size.height / 2 - 2), anchor: .leading) }
+                if x + 30 < size.width {
+                    let label = Text(Self.label(time, step: step)).font(.system(size: 10, weight: .medium).monospacedDigit()).foregroundStyle(.secondary)
+                    let labelY: CGFloat = size.height / 2 - 2
+                    context.draw(label, at: CGPoint(x: x + 4, y: labelY), anchor: .leading)
+                }
                 time += step
             }
         }
