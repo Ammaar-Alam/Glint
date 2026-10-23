@@ -48,6 +48,39 @@ final class VideoExportTests: XCTestCase {
         XCTAssertEqual(try Data(contentsOf: output), original)
     }
 
+    @MainActor
+    func testRecordedGIFLandsInLibraryNextToItsProject() async throws {
+        let root = try VideoTests.directory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let recording = root.appendingPathComponent("take.glintvideo", isDirectory: true)
+        try FileManager.default.createDirectory(at: recording, withIntermediateDirectories: false)
+        try await VideoTests.movie(at: recording.appendingPathComponent("screen.mov"))
+        let project = VideoProject(duration: 1, width: 96, height: 64, frameRate: 10)
+        try project.save(to: recording)
+        let library = CaptureLibrary(root: root.appendingPathComponent("library", isDirectory: true))
+        let item = try await library.ingest(recording)
+        let output = ImageFile.temporaryURL(extension: "gif")
+        try await VideoExporter.recordingGIF(project: item.url(in: library.root), destination: output)
+        let gif = try await library.ingest(output)
+        try ImageFile.removeTemporary(output)
+
+        XCTAssertEqual(library.items.map(\.kind), [.image, .videoProject])
+        XCTAssertFalse(FileManager.default.fileExists(atPath: output.path))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: gif.thumbnail(in: library.root).path))
+        XCTAssertEqual(try VideoProject.load(from: item.url(in: library.root)), project)
+        let source = try XCTUnwrap(CGImageSourceCreateWithURL(gif.url(in: library.root) as CFURL, nil))
+        XCTAssertEqual(CGImageSourceGetType(source) as String?, "com.compuserve.gif")
+        XCTAssertGreaterThan(CGImageSourceGetCount(source), 5)
+        let frame = try XCTUnwrap(CGImageSourceCreateImageAtIndex(source, 0, nil))
+        XCTAssertEqual(frame.width, 320)
+        let context = try XCTUnwrap(CGContext(data: nil, width: frame.width, height: frame.height, bitsPerComponent: 8, bytesPerRow: frame.width * 4,
+                                              space: CGColorSpace(name: CGColorSpace.sRGB)!, bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue))
+        context.draw(frame, in: CGRect(x: 0, y: 0, width: frame.width, height: frame.height))
+        let corner = try XCTUnwrap(context.data?.assumingMemoryBound(to: UInt8.self)).advanced(by: (frame.width * 4 + 4) * 2)
+        XCTAssertGreaterThan(corner[0], 200, "the GIF shows the plain recording without the editor background")
+        XCTAssertLessThan(corner[2], 60)
+    }
+
     private static func gifDelays(at url: URL) throws -> [Double] {
         let source = try XCTUnwrap(CGImageSourceCreateWithURL(url as CFURL, nil))
         return try (0..<CGImageSourceGetCount(source)).map { index in
