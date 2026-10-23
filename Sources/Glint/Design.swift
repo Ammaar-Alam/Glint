@@ -15,11 +15,17 @@ extension NSColor {
             ? NSColor(srgbRed: 0.02, green: 0.13, blue: 0.15, alpha: 1)
             : .white
     }
+
+    // grouped rows sitting on the window background
+    static let groupFill = NSColor(name: "groupFill") { appearance in
+        appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua ? NSColor(white: 1, alpha: 0.05) : NSColor(white: 0, alpha: 0.035)
+    }
 }
 
 extension Color {
     static let glint = Color(nsColor: .glint)
     static let onGlint = Color(nsColor: .onGlint)
+    static let groupFill = Color(nsColor: .groupFill)
 }
 
 enum Radius {
