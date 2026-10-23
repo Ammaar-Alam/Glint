@@ -96,7 +96,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 let recovered = try await RecordingController.recoverInterruptedRecordings()
                 for url in recovered { importRecording(url, openEditor: false) }
             } catch { library.error = error.localizedDescription }
-            if !launchInBackground { showHome() }
+            if !UserDefaults.standard.bool(forKey: "onboarded") || !CGPreflightScreenCaptureAccess() { showOnboarding() }
+            else if !launchInBackground { showHome() }
         }
     }
 
@@ -304,6 +305,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     func takeCapture(_ mode: CaptureMode, recording: RecordingFormat? = nil) {
         guard terminationTask == nil, captureTask == nil, !capture.isCapturing, recorder.state == .idle else { NSSound.beep(); return }
+        guard CGPreflightScreenCaptureAccess() else { showOnboarding(); return }
         captureTask = Task {
             defer { captureTask = nil }
             do {
@@ -631,6 +633,36 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
         historyWindow?.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
+    }
+
+    private var onboardingWindow: NSWindow?
+
+    func showOnboarding() {
+        if onboardingWindow == nil {
+            let window = makeWindow(title: "Welcome to Glint", size: NSSize(width: 520, height: 560), root: OnboardingView(
+                relaunch: { [weak self] in self?.relaunch() },
+                finish: { [weak self] in
+                    UserDefaults.standard.set(true, forKey: "onboarded")
+                    self?.onboardingWindow?.close()
+                    self?.onboardingWindow = nil
+                }))
+            window.styleMask.remove(.resizable)
+            window.styleMask.insert(.fullSizeContentView)
+            window.titlebarAppearsTransparent = true
+            window.titleVisibility = .hidden
+            onboardingWindow = window
+        }
+        onboardingWindow?.makeKeyAndOrderFront(nil)
+        NSApp.activate(ignoringOtherApps: true)
+    }
+
+    // macOS applies a new screen recording grant only to a fresh launch
+    private func relaunch() {
+        let task = Process()
+        task.executableURL = URL(fileURLWithPath: "/bin/sh")
+        task.arguments = ["-c", "sleep 1; /usr/bin/open \"$0\"", Bundle.main.bundlePath]
+        do { try task.run() } catch { showError(error); return }
+        NSApp.terminate(nil)
     }
 
     func showSettings() {

@@ -86,7 +86,7 @@ private struct InspectorGroup<Content: View>: View {
                 HStack {
                     if let title { Text(title).font(.system(size: 11, weight: .semibold)).foregroundStyle(.secondary) }
                     Spacer()
-                    if let isOn { Toggle(title ?? "", isOn: isOn).labelsHidden().toggleStyle(.switch).controlSize(.mini) }
+                    if let isOn { Toggle(title ?? "", isOn: isOn).labelsHidden().toggleStyle(FlatToggleStyle()) }
                 }
                 .padding(.horizontal, 4)
             }
@@ -121,7 +121,7 @@ private struct SwitchRow: View {
     let title: String
     let isOn: Binding<Bool>
     var body: some View {
-        Row(title: title) { Toggle(title, isOn: isOn).labelsHidden().toggleStyle(.switch).controlSize(.mini) }
+        Row(title: title) { Toggle(title, isOn: isOn).labelsHidden().toggleStyle(FlatToggleStyle()) }
     }
 }
 
@@ -147,12 +147,15 @@ private struct SegmentRow<Value: Hashable & Identifiable & RawRepresentable<Stri
 
     var body: some View {
         Row(title: title) {
-            Picker(title, selection: selection) {
+            Segmented {
                 ForEach(options) { option in
-                    if let symbol { Image(systemName: symbol(option)).help(option.rawValue).tag(option) } else { Text(option.rawValue).tag(option) }
+                    Button { selection.wrappedValue = option } label: {
+                        if let symbol { Image(systemName: symbol(option)) } else { Text(option.rawValue).font(.system(size: 12, weight: .medium)) }
+                    }
+                    .buttonStyle(ToolButtonStyle(selected: selection.wrappedValue == option, size: CGSize(width: symbol == nil ? 70 : 30, height: 24)))
+                    .help(option.rawValue)
                 }
             }
-                .labelsHidden().pickerStyle(.segmented).controlSize(.small).fixedSize()
         }
     }
 }
@@ -165,8 +168,7 @@ private struct ColorRow: View {
 
     var body: some View {
         Row(title: title) {
-            ColorPicker(title, selection: Binding(get: { Color(nsColor: project.edits[keyPath: key].nsColor) }, set: { model.set(key, VideoColor(NSColor($0))) }), supportsOpacity: false)
-                .labelsHidden()
+            ColorWellButton(color: project.edits[keyPath: key].nsColor) { model.set(key, VideoColor($0)) }
         }
     }
 }
@@ -236,8 +238,8 @@ private struct BackgroundPanel: View {
                 .padding(.horizontal, 12).padding(.vertical, 8)
                 Row(title: "Colors") {
                     HStack(spacing: 6) {
-                        ColorPicker("Top", selection: color(\.backgroundTop), supportsOpacity: false).labelsHidden()
-                        ColorPicker("Bottom", selection: color(\.backgroundBottom), supportsOpacity: false).labelsHidden()
+                        ColorWellButton(color: project.edits.backgroundTop.nsColor) { model.set(\.backgroundTop, VideoColor($0)) }
+                        ColorWellButton(color: project.edits.backgroundBottom.nsColor) { model.set(\.backgroundBottom, VideoColor($0)) }
                     }
                 }
                 .disabled(project.edits.backgroundFile != nil)
@@ -294,9 +296,6 @@ private struct BackgroundPanel: View {
         .help(selected ? "Remove image" : "Choose image")
     }
 
-    private func color(_ key: WritableKeyPath<VideoEdits, VideoColor>) -> Binding<Color> {
-        Binding(get: { Color(nsColor: project.edits[keyPath: key].nsColor) }, set: { model.set(key, VideoColor(NSColor($0))) })
-    }
 }
 
 private struct ZoomPanel: View {
@@ -488,12 +487,7 @@ private struct ExportPanel: View {
         VStack(alignment: .leading, spacing: 18) {
             InspectorGroup(title: "Size") {
                 Row(title: "Resolution") {
-                    Picker("Resolution", selection: resolution) {
-                        ForEach([1280, 1920, 2560, 3840], id: \.self) { Text("\(String($0)) px").tag($0) }
-                        Divider()
-                        Text("Custom").tag(0)
-                    }
-                    .labelsHidden().controlSize(.small).fixedSize()
+                    FlatPicker(selection: resolution, options: [1280, 1920, 2560, 3840].map { ("\(String($0)) px", $0) } + [("Custom", 0)])
                 }
                 if project.edits.customWidth != nil {
                     Row(title: "Pixels") {
@@ -502,7 +496,7 @@ private struct ExportPanel: View {
                             Text("×").foregroundStyle(.secondary)
                             TextField("Height", value: $customHeight, format: .number.grouping(.never)).frame(width: 52)
                         }
-                        .textFieldStyle(.roundedBorder).controlSize(.small).multilineTextAlignment(.trailing)
+                        .textFieldStyle(FlatTextFieldStyle()).multilineTextAlignment(.trailing)
                         .onSubmit(applyCustomSize)
                         Button("Apply", action: applyCustomSize).buttonStyle(SecondaryButtonStyle()).controlSize(.small)
                     }
@@ -521,10 +515,7 @@ private struct ExportPanel: View {
             }
             InspectorGroup(title: "GIF") {
                 Row(title: "Frame rate") {
-                    Picker("Frame rate", selection: $model.gifFrameRate) {
-                        ForEach(Array(Set([5, 10, 15, 20, 25, 30, 50, min(50, project.frameRate)])).filter { $0 <= project.frameRate }.sorted(), id: \.self) { Text("\($0) fps").tag($0) }
-                    }
-                    .labelsHidden().controlSize(.small).fixedSize()
+                    FlatPicker(selection: $model.gifFrameRate, options: Array(Set([5, 10, 15, 20, 25, 30, 50, min(50, project.frameRate)])).filter { $0 <= project.frameRate }.sorted().map { ("\($0) fps", $0) })
                 }
             }
         }
