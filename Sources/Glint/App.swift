@@ -96,7 +96,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 let recovered = try await RecordingController.recoverInterruptedRecordings()
                 for url in recovered { importRecording(url, openEditor: false) }
             } catch { library.error = error.localizedDescription }
-            if !UserDefaults.standard.bool(forKey: "onboarded") || !CGPreflightScreenCaptureAccess() { showOnboarding() }
+            // a relaunch after granting access returns to the welcome window to confirm it
+            let defaults = UserDefaults.standard
+            if !defaults.bool(forKey: "onboarded") || !CGPreflightScreenCaptureAccess() || defaults.bool(forKey: "screenAccessRequested") { showOnboarding() }
             else if !launchInBackground { showHome() }
         }
     }
@@ -389,6 +391,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                     if let format { _ = try CaptureFolder.saveImage(source, named: item.title, format: format, in: folder) }
                     else { _ = try CaptureFolder.saveFile(source, named: item.title, in: folder) }
                 }.value
+                Toast.show("Saved to \(FileManager.default.displayName(atPath: folder.path))", symbol: "arrow.down.circle.fill")
             } catch { showError(error) }
         }
     }
@@ -518,6 +521,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         if item.kind.isVideo || item.filename.hasSuffix(".gif") {
             if item.kind == .videoProject { edit(item); return }
             clipboard.commit(request) { _ = $0.writeObjects([item.url(in: library.root) as NSURL]) }
+            Toast.show("Copied")
             return
         }
         clipboardTask = Task {
@@ -535,6 +539,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 try clipboard.commit(request) {
                     guard $0.setData(data, forType: .png) else { throw GlintError.message("The image couldn’t be copied.") }
                 }
+                Toast.show("Copied")
             } catch is CancellationError {} catch { showError(error) }
         }
     }
@@ -643,6 +648,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 relaunch: { [weak self] in self?.relaunch() },
                 finish: { [weak self] in
                     UserDefaults.standard.set(true, forKey: "onboarded")
+                    UserDefaults.standard.set(false, forKey: "screenAccessRequested")
                     self?.onboardingWindow?.close()
                     self?.onboardingWindow = nil
                 }))

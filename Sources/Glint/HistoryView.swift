@@ -357,7 +357,7 @@ struct HistoryCard: View {
                 Button(item.kind == .videoProject ? "Export" : "Save") { perform(.saveAs) }.buttonStyle(HUDButtonStyle())
             }
         }
-        .overlay(alignment: .topTrailing) { corner("Edit", "pencil", .edit) }
+        .overlay(alignment: .topTrailing) { corner("Edit", "square.and.pencil", .edit) }
         .overlay(alignment: .bottomLeading) { if !item.kind.isVideo { corner("Pin", "pin.fill", .pin) } }
         .overlay(alignment: .bottomTrailing) { corner("Move to Trash", "trash", .trash) }
     }
