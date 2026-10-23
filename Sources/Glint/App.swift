@@ -41,6 +41,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var recordingHiddenWindows: [NSWindow] = []
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        NSApp.appearance = NSAppearance(named: .aqua)
         let launchEvent = NSAppleEventManager.shared().currentAppleEvent
         let launchReason = launchEvent?.paramDescriptor(forKeyword: keyAEPropData)?.enumCodeValue
         let launchInBackground = launchEvent?.eventID == kAEOpenApplication &&
@@ -357,9 +358,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
     }
 
+    // movies and animated gifs are copied as they are, only stills convert to the chosen format
+    static func screenshotFormat(for item: CaptureItem, source: URL) -> ScreenshotFormat? {
+        item.kind.isVideo || source.pathExtension.lowercased() == "gif" ? nil : ScreenshotFormat.current
+    }
+
     private func saveToFolder(_ item: CaptureItem, folder: URL) {
         guard let source = item.shareURL(in: library.root) else { edit(item); return }
-        let format = item.kind.isVideo ? nil : ScreenshotFormat.current
+        let format = Self.screenshotFormat(for: item, source: source)
         pendingWrites += 1
         Task {
             defer { pendingWrites -= 1 }
@@ -521,7 +527,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     func save(_ item: CaptureItem) {
         if item.kind == .videoProject { edit(item); return }
         guard let source = item.shareURL(in: library.root) else { return }
-        let format = item.kind.isVideo ? nil : ScreenshotFormat.current
+        let format = Self.screenshotFormat(for: item, source: source)
         let type = format?.type ?? UTType(filenameExtension: source.pathExtension) ?? .data
         let panel = NSSavePanel()
         panel.nameFieldStringValue = item.title + "." + (type.preferredFilenameExtension ?? source.pathExtension)
