@@ -5,6 +5,30 @@ import ScreenCaptureKit
 @testable import Clipt
 
 final class RecordingTests: XCTestCase {
+    func testRecoveryKeepsUnimportedProjectsAndRejectsMalformedImportMarker() async throws {
+        let root = try VideoTests.directory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let completed = root.appendingPathComponent("completed.cliptvideo", isDirectory: true)
+        try FileManager.default.createDirectory(at: completed, withIntermediateDirectories: true)
+        try await VideoTests.movie(at: completed.appendingPathComponent("screen.mov"))
+        try VideoProject(duration: 1, width: 96, height: 64, frameRate: 10).save(to: completed)
+        let interrupted = root.appendingPathComponent("interrupted.cliptvideo", isDirectory: true)
+        try FileManager.default.copyItem(at: completed, to: interrupted)
+        try Data().write(to: interrupted.appendingPathComponent("recording-in-progress"))
+        let imported = root.appendingPathComponent("imported.cliptvideo", isDirectory: true)
+        try FileManager.default.copyItem(at: completed, to: imported)
+        try Data(UUID().uuidString.utf8).write(to: imported.appendingPathComponent("imported-to-library"))
+        let malformed = root.appendingPathComponent("malformed.cliptvideo", isDirectory: true)
+        try FileManager.default.copyItem(at: completed, to: malformed)
+        try Data("invalid marker".utf8).write(to: malformed.appendingPathComponent("imported-to-library"))
+        let recovered = try await RecordingController.recoverInterruptedRecordings(in: root)
+        XCTAssertEqual(Set(recovered.map { $0.resolvingSymlinksInPath() }), Set([completed, interrupted, malformed].map { $0.resolvingSymlinksInPath() }))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: imported.path))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: completed.appendingPathComponent("screen.mov").path))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: malformed.appendingPathComponent("screen.mov").path))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: interrupted.appendingPathComponent("recording-in-progress").path))
+    }
+
     func testPauseTimeIsRemovedFromAllStreamsAndEvents() {
         var clock = RecordingTimeline(origin: 100)
         XCTAssertEqual(clock.presentationTime(for: 102), 2)
