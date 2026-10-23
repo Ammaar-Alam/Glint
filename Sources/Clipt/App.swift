@@ -23,6 +23,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     let recorder = RecordingController()
     private lazy var shelf = QuickAccessPanel(library: library)
     private var statusItem: NSStatusItem!
+    private var captureCommandMenu: NSMenu?
     private var historyWindow: NSWindow?
     private var settingsWindow: NSWindow?
     private var recordingSetup: NSWindow?
@@ -172,24 +173,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         if let closeObserver { NotificationCenter.default.removeObserver(closeObserver) }
     }
 
-    func menuWillOpen(_ menu: NSMenu) { rebuildMenu(menu) }
+    func menuWillOpen(_ menu: NSMenu) {
+        if menu === captureCommandMenu {
+            menu.removeAllItems()
+            addCaptureCommands(to: menu)
+        } else { rebuildMenu(menu) }
+    }
 
     private func rebuildMenu(_ menu: NSMenu) {
         menu.removeAllItems()
-        for mode in CaptureMode.allCases {
-            let item = HandlerMenuItem(mode.title) { [weak self] in self?.takeCapture(mode) }
-            item.isEnabled = captureTask == nil && !capture.isCapturing && recorder.state == .idle
-            menu.addItem(item)
-        }
-        menu.addItem(.separator())
-        if recorder.state == .recording || recorder.state == .paused {
-            menu.addItem(HandlerMenuItem("Stop Recording") { [weak self] in self?.stopRecording() })
-            menu.addItem(HandlerMenuItem(recorder.state == .paused ? "Resume Recording" : "Pause Recording") { [weak self] in self?.togglePause() })
-        } else {
-            let record = HandlerMenuItem("Record Screen…") { [weak self] in self?.showRecordingSetup() }
-            record.isEnabled = recorder.state == .idle
-            menu.addItem(record)
-        }
+        addCaptureCommands(to: menu)
         menu.addItem(.separator())
         menu.addItem(HandlerMenuItem("Open File…", key: "o") { [weak self] in self?.openFile() })
         menu.addItem(HandlerMenuItem("Open Clipboard") { [weak self] in self?.openClipboard() })
@@ -204,6 +197,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         menu.addItem(HandlerMenuItem("Settings…", key: ",") { [weak self] in self?.showSettings() })
         menu.addItem(HandlerMenuItem("About Clipt") { NSApp.orderFrontStandardAboutPanel(nil); NSApp.activate(ignoringOtherApps: true) })
         menu.addItem(HandlerMenuItem("Quit Clipt", key: "q") { NSApp.terminate(nil) })
+    }
+
+    private func addCaptureCommands(to menu: NSMenu) {
+        for mode in CaptureMode.allCases {
+            let item = HandlerMenuItem(mode.title) { [weak self] in self?.takeCapture(mode) }
+            item.isEnabled = captureTask == nil && !capture.isCapturing && recorder.state == .idle
+            menu.addItem(item)
+        }
+        menu.addItem(.separator())
+        if recorder.state == .recording || recorder.state == .paused {
+            menu.addItem(HandlerMenuItem("Stop Recording") { [weak self] in self?.stopRecording() })
+            menu.addItem(HandlerMenuItem(recorder.state == .paused ? "Resume Recording" : "Pause Recording") { [weak self] in self?.togglePause() })
+        } else {
+            let record = HandlerMenuItem("Record Screen…") { [weak self] in self?.showRecordingSetup() }
+            record.isEnabled = recorder.state == .idle
+            menu.addItem(record)
+        }
     }
 
     private func makeMainMenu() {
@@ -224,6 +234,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let fileItem = NSMenuItem(title: "File", action: nil, keyEquivalent: "")
         fileItem.submenu = fileMenu
         main.addItem(fileItem)
+        let captureMenu = NSMenu(title: "Capture")
+        captureMenu.delegate = self
+        captureCommandMenu = captureMenu
+        addCaptureCommands(to: captureMenu)
+        let captureItem = NSMenuItem(title: "Capture", action: nil, keyEquivalent: "")
+        captureItem.submenu = captureMenu
+        main.addItem(captureItem)
         let editMenu = NSMenu(title: "Edit")
         for (title, selector, key) in [("Undo", Selector(("undo:")), "z"), ("Redo", Selector(("redo:")), "Z"),
                                        ("Cut", #selector(NSText.cut(_:)), "x"), ("Copy", #selector(NSText.copy(_:)), "c"),
