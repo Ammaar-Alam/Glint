@@ -1,52 +1,83 @@
 <p align="center">
-  <img src="assets/glint-icon.svg" alt="Glint" width="160">
+  <img src="assets/glint-icon.svg" alt="Glint" width="140">
 </p>
 
 <h1 align="center">Glint</h1>
 
 <p align="center">
   Screenshots, annotation and screen recording for macOS.<br>
-  Native, free and fully local.
+  Free, open source and fully local.
 </p>
 
 <p align="center">
-  <a href="#build">Build</a> · <a href="CONTRIBUTING.md">Contributing</a> · <a href="LICENSE">License</a>
+  <a href="https://github.com/Ammaar-Alam/Glint/releases/latest">Download</a> · <a href="#features">Features</a> · <a href="CONTRIBUTING.md">Contributing</a> · <a href="LICENSE">License</a>
+</p>
+
+<p align="center">
+  <img src="assets/readme/editor.png" alt="The Glint editor with arrows, counters, a highlight and pixelated emails on a gradient background" width="880">
+</p>
+
+## Capture, then keep going
+
+Press <kbd>⇧⌘4</kbd> and your capture lands in the corner. Hover to copy, save, pin or edit, or drag it straight into any app.
+
+<p align="center">
+  <img src="assets/readme/popup.gif" alt="Capture cards sliding in with Copy and Save on hover" width="660">
 </p>
 
 ## Features
 
 **Capture**
-- Area, window, full screen, previous area, timer and all-in-one
-- Scrolling capture, vertical and horizontal
-- Frozen selection, magnifier, exact sizes and aspect ratios
+- Area, window, full screen, previous area, scrolling and text, all from one bar on <kbd>⇧⌘5</kbd>
+- Exact sizes, aspect ratios, timer, frozen screen and a real-time magnifier
 - Text and QR recognition on device
 
 **Annotate**
-- Arrows, shapes, pen, text, counters, highlight, spotlight
-- Blur, pixelate and solid redaction
-- Crop, resize, rotate, flip, canvas size, backgrounds and presets
-- Editable `.glint` projects
+- Arrows, shapes, pen, text, counters, highlight and spotlight
+- Redact with blur, pixelate or a solid cover
+- Generated gradient backgrounds, padding, corners and shadow in one click
+- Crop, resize, rotate, flip and canvas size, with editable `.glint` projects
 
 **Record**
-- System audio, microphone, camera, clicks and optional keystrokes
-- Editable `.glintvideo` projects: trim, cut, cursor zoom, backgrounds, camera and cursor effects after recording
+- Video or GIF with system audio, microphone, camera, clicks and keystrokes
+- Edit after recording: trim, cut, cursor-following zooms, backgrounds and camera layout
 - MP4, GIF and lossless trim export
 
-**Everything else**
-- Quick access popup, history, pins and drag to any app
-- Configurable shortcuts and `glint://` automation
+**Keep everything**
+- A searchable history of screenshots, recordings and GIFs
+- Automatic saves to any folder in PNG, JPEG or HEIC
+- Pins, drag to any app, configurable shortcuts and `glint://` automation
+
+<table>
+  <tr>
+    <td><img src="assets/readme/history.png" alt="History library"></td>
+    <td><img src="assets/readme/video.png" alt="Video editor with a frame-strip timeline"></td>
+  </tr>
+  <tr>
+    <td><img src="assets/readme/capture-bar.png" alt="All-in-one capture bar"><br><img src="assets/readme/record-bar.png" alt="Recording options"></td>
+    <td><img src="assets/readme/settings.png" alt="Settings"></td>
+  </tr>
+</table>
 
 Projects keep the original pixels under redactions. Share exported images, not project files.
+
+## Install
+
+Download the DMG from [Releases](https://github.com/Ammaar-Alam/Glint/releases/latest) and drag Glint to Applications. Requires macOS 27.
+
+Glint walks you through Screen Recording access on first launch. To use the screenshot keys, turn off **Screenshots** in System Settings → Keyboard → Keyboard Shortcuts.
 
 ## Shortcuts
 
 | Shortcut | Action |
 |---|---|
-| `⌃⌥4` | Capture area |
-| `⌃⌥3` | Capture screen |
-| `⌃⌥5` | Record / stop |
-| `⌃⌥T` | Capture text |
-| `⌃⌥H` | History |
+| <kbd>⇧⌘5</kbd> | All-in-one capture |
+| <kbd>⇧⌘4</kbd> | Capture area |
+| <kbd>⇧⌘3</kbd> | Capture screen |
+| <kbd>⇧⌘2</kbd> | Capture text |
+| <kbd>⇧⌘6</kbd> | Record / stop |
+
+All shortcuts can be changed in Settings.
 
 ## Build
 
@@ -72,10 +103,6 @@ glint://history
 ```
 
 </details>
-
-## Permissions
-
-Screen Recording is required. Microphone, camera and Accessibility are requested only when a feature needs them.
 
 ## License
 
