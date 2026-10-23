@@ -57,6 +57,85 @@ final class VideoTests: XCTestCase {
         return view.subviews.lazy.compactMap { nativePlayer(in: $0) }.first
     }
 
+    func testTimelineScaleMapsTimeAndPicksReadableTicks() {
+        let scale = VideoTimelineScale(duration: 10, width: 1032, inset: 16)
+        XCTAssertEqual(scale.pointsPerSecond, 100)
+        XCTAssertEqual(scale.x(0), 16)
+        XCTAssertEqual(scale.x(2.5), 266)
+        XCTAssertEqual(scale.x(20), 1016)
+        XCTAssertEqual(scale.time(266), 2.5)
+        XCTAssertEqual(scale.time(0), 0)
+        XCTAssertEqual(scale.time(5000), 10)
+        XCTAssertEqual(scale.tickStep, 1)
+        XCTAssertEqual(VideoTimelineScale(duration: 600, width: 1032).tickStep, 60)
+        XCTAssertEqual(VideoTimelineScale(duration: 10, width: 20).time(50), 0)
+    }
+
+    func testFrameStripDensityKeepsDecodedFrames() {
+        XCTAssertEqual(VideoFrameStrip.density(for: 0), 8)
+        XCTAssertEqual(VideoFrameStrip.density(for: 9), 16)
+        XCTAssertEqual(VideoFrameStrip.density(for: 5000), 512)
+        let coarse = VideoFrameStrip.times(duration: 6, density: 8)
+        let fine = VideoFrameStrip.times(duration: 6, density: 16)
+        XCTAssertEqual(coarse.first, 0)
+        XCTAssertEqual(coarse.count, 8)
+        XCTAssertTrue(coarse.allSatisfy { time in fine.contains { abs($0 - time) < 0.000_001 } })
+        XCTAssertTrue(fine.allSatisfy { $0 < 6 })
+        XCTAssertTrue(VideoFrameStrip.times(duration: 0, density: 8).isEmpty)
+    }
+
+    @MainActor
+    func testEditorDecodesFrameStripOffTheMainThread() async throws {
+        let root = try Self.directory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let package = root.appendingPathComponent("recording.glintvideo", isDirectory: true)
+        try FileManager.default.createDirectory(at: package, withIntermediateDirectories: false)
+        try await Self.movie(at: package.appendingPathComponent("screen.mov"))
+        try VideoProject(duration: 1, width: 96, height: 64, frameRate: 10).save(to: package)
+        let model = VideoEditorModel(url: package) { _ in }
+        defer { model.shutdown() }
+        model.load()
+        var deadline = Date().addingTimeInterval(5)
+        while model.project == nil && Date() < deadline { try await Task.sleep(for: .milliseconds(10)) }
+        model.loadFrames(tiles: 4)
+        deadline = Date().addingTimeInterval(5)
+        while model.frames.count < 8 && Date() < deadline { try await Task.sleep(for: .milliseconds(10)) }
+        XCTAssertEqual(model.frames.map(\.time), VideoFrameStrip.times(duration: 1, density: 8))
+        XCTAssertTrue(model.frame(near: 0.49) === model.frames[4].image)
+        model.loadFrames(tiles: 3)
+        XCTAssertEqual(model.frames.count, 8)
+    }
+
+    @MainActor
+    func testTimelineEditsCutsAndZoomsWithoutEmptyingTheVideo() async throws {
+        let root = try Self.directory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let package = root.appendingPathComponent("recording.glintvideo", isDirectory: true)
+        try FileManager.default.createDirectory(at: package, withIntermediateDirectories: false)
+        try await Self.movie(at: package.appendingPathComponent("screen.mov"))
+        try VideoProject(duration: 1, width: 96, height: 64, frameRate: 10).save(to: package)
+        let model = VideoEditorModel(url: package) { _ in }
+        defer { model.shutdown() }
+        model.load()
+        let deadline = Date().addingTimeInterval(5)
+        while model.project == nil && Date() < deadline { try await Task.sleep(for: .milliseconds(10)) }
+        model.removeRange(start: 0.2, end: 0.4)
+        let cut = try XCTUnwrap(model.project?.edits.cuts.first)
+        model.updateCut(cut.id, start: 0.1, end: 0.5)
+        XCTAssertEqual(model.project?.edits.cuts.first?.start, 0.1)
+        XCTAssertEqual(model.project?.edits.cuts.first?.end, 0.5)
+        model.updateCut(cut.id, start: 0, end: 1)
+        XCTAssertNotNil(model.errorMessage)
+        XCTAssertEqual(model.project?.edits.cuts.first?.end, 0.5)
+        model.addZoom(at: 0.6)
+        let zoom = try XCTUnwrap(model.project?.edits.zooms.first)
+        XCTAssertEqual(zoom.start, 0.5)
+        XCTAssertEqual(model.selectedZoom, zoom.id)
+        model.removeZoom(zoom.id)
+        XCTAssertNil(model.selectedZoom)
+        XCTAssertTrue(model.project?.edits.zooms.isEmpty ?? false)
+    }
+
     func testOverlappingCutsMapEditedTimeToOriginalFrames() throws {
         var project = VideoProject(duration: 10, width: 1920, height: 1080)
         project.edits.trimStart = 1; project.edits.trimEnd = 9
