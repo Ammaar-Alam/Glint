@@ -55,9 +55,11 @@ struct ToolButtonStyle: ButtonStyle {
     var tint = Color.glint
     // a solid fill for the one active tool in a strip
     var prominent = false
+    // the strip draws one sliding fill itself
+    var drawsSelection = true
 
     func makeBody(configuration: Configuration) -> some View {
-        ToolButtonLabel(configuration: configuration, selected: selected, size: size, tint: tint, prominent: prominent)
+        ToolButtonLabel(configuration: configuration, selected: selected, size: size, tint: tint, prominent: prominent, drawsSelection: drawsSelection)
     }
 }
 
@@ -67,6 +69,7 @@ private struct ToolButtonLabel: View {
     let size: CGSize
     let tint: Color
     let prominent: Bool
+    let drawsSelection: Bool
     @State private var hovering = false
     @Environment(\.isEnabled) private var enabled
 
@@ -77,7 +80,7 @@ private struct ToolButtonLabel: View {
             .foregroundStyle(selected ? (prominent ? Color.white : tint) : Color.primary.opacity(enabled ? 0.85 : 0.3))
             .background(
                 RoundedRectangle(cornerRadius: Radius.control, style: .continuous)
-                    .fill(selected ? (prominent ? tint : tint.opacity(hovering ? 0.2 : 0.14)) : Color.primary.opacity(hovering && enabled ? 0.08 : 0))
+                    .fill(selected ? (drawsSelection ? (prominent ? tint : tint.opacity(hovering ? 0.2 : 0.14)) : .clear) : Color.primary.opacity(hovering && enabled ? 0.08 : 0))
             )
             .contentShape(Rectangle())
             .scaleEffect(configuration.isPressed ? 0.94 : 1)
