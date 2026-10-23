@@ -538,10 +538,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     func saveToDesktop(_ item: CaptureItem) {
         guard let source = item.shareURL(in: library.root) else { edit(item); return }
         let name = item.title.components(separatedBy: CharacterSet(charactersIn: "/:")).joined(separator: "-")
-        let destination = ExportFile.available(URL.desktopDirectory.appendingPathComponent(name).appendingPathExtension(source.pathExtension))
+        let destination = ExportFile.reserve(URL.desktopDirectory.appendingPathComponent(name).appendingPathExtension(source.pathExtension))
         pendingWrites += 1
         Task {
-            defer { pendingWrites -= 1 }
+            defer { pendingWrites -= 1; ExportFile.release(destination) }
             do { try await Task.detached { try ExportFile.copy(source, to: destination) }.value }
             catch { showError(error) }
         }
@@ -796,10 +796,28 @@ enum ExportFile {
     }
 
     // the first free name, numbered the way Finder does
-    static func available(_ url: URL) -> URL {
+    // names handed out but not written yet, so overlapping saves never share a file
+    private static let lock = NSLock()
+    private static var reserved: Set<String> = []
+
+    static func reserve(_ url: URL) -> URL {
+        lock.lock()
+        defer { lock.unlock() }
+        let candidate = available(url, taken: reserved)
+        reserved.insert(candidate.path)
+        return candidate
+    }
+
+    static func release(_ url: URL) {
+        lock.lock()
+        reserved.remove(url.path)
+        lock.unlock()
+    }
+
+    static func available(_ url: URL, taken: Set<String> = []) -> URL {
         let folder = url.deletingLastPathComponent(), base = url.deletingPathExtension().lastPathComponent
         var candidate = url, number = 2
-        while FileManager.default.fileExists(atPath: candidate.path) {
+        while FileManager.default.fileExists(atPath: candidate.path) || taken.contains(candidate.path) {
             candidate = folder.appendingPathComponent("\(base) \(number)").appendingPathExtension(url.pathExtension)
             number += 1
         }

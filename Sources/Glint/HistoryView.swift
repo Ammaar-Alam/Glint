@@ -98,7 +98,8 @@ struct HistoryView: View {
     private static let margin: CGFloat = 28
 
     private var sections: [HistorySection] { HistorySection.make(library.items, filter: filter, query: query) }
-    private var selectedItem: CaptureItem? { library.items.first { $0.id == selected } }
+    // only a capture still in the results can be acted on
+    private var selectedItem: CaptureItem? { sections.lazy.flatMap(\.items).first { $0.id == selected } }
 
     var body: some View {
         let sections = sections
