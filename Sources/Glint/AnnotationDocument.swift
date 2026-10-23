@@ -70,9 +70,9 @@ enum AnnotationTool: String, CaseIterable, Identifiable, Codable, Sendable {
         case .text: return "textformat"
         case .counter: return "1.circle"
         case .highlight: return "highlighter"
-        case .spotlight: return "flashlight.on.fill"
-        case .pixelate: return "square.grid.3x3.fill"
-        case .blur: return "drop.halffull"
+        case .spotlight: return "rectangle.center.inset.filled"
+        case .pixelate: return "checkerboard.rectangle"
+        case .blur: return "drop.fill"
         case .redact: return "rectangle.fill"
         case .crop: return "crop"
         case .image: return "photo.badge.plus"
@@ -122,6 +122,39 @@ struct ImageAnnotation: Codable, Equatable, Identifiable, Sendable {
         return CGRect(x: x.min() ?? 0, y: y.min() ?? 0,
                       width: max(1, (x.max() ?? 0) - (x.min() ?? 0)),
                       height: max(1, (y.max() ?? 0) - (y.min() ?? 0)))
+    }
+
+    // strokes count where they are drawn, not across their whole bounding box
+    func hitTest(_ point: CGPoint, tolerance: CGFloat) -> Bool {
+        guard [.pen, .line, .arrow, .curvedArrow].contains(tool), let start = points.first, let end = points.last, points.count >= 2 else {
+            return bounds.insetBy(dx: -tolerance, dy: -tolerance).contains(point)
+        }
+        var path = points
+        if tool == .curvedArrow {
+            let control = points.count > 2 ? points[1] : CGPoint(x: end.x, y: start.y)
+            path = (0...24).map { step -> CGPoint in
+                let t = CGFloat(step) / 24
+                let u: CGFloat = 1 - t
+                let a: CGFloat = u * u, b: CGFloat = 2 * u * t, c: CGFloat = t * t
+                let x: CGFloat = a * start.x + b * control.x + c * end.x
+                let y: CGFloat = a * start.y + b * control.y + c * end.y
+                return CGPoint(x: x, y: y)
+            }
+        }
+        let reach = tolerance + lineWidth / 2
+        for index in path.indices.dropFirst() where Self.distance(point, path[index - 1], path[index]) <= reach { return true }
+        return false
+    }
+
+    // split into typed steps so older compilers can check it
+    private static func distance(_ p: CGPoint, _ a: CGPoint, _ b: CGPoint) -> CGFloat {
+        let dx: CGFloat = b.x - a.x
+        let dy: CGFloat = b.y - a.y
+        let length: CGFloat = dx * dx + dy * dy
+        guard length > 0 else { return hypot(p.x - a.x, p.y - a.y) }
+        let projected: CGFloat = ((p.x - a.x) * dx + (p.y - a.y) * dy) / length
+        let t: CGFloat = max(0, min(1, projected))
+        return hypot(p.x - (a.x + t * dx), p.y - (a.y + t * dy))
     }
 
     mutating func move(dx: CGFloat, dy: CGFloat) {

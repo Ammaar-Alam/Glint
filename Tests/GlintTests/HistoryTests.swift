@@ -27,13 +27,15 @@ final class HistoryTests: XCTestCase {
     func testFilterAndSearch() {
         let items = [
             item("Bug report", daysAgo: 0), item("Demo", daysAgo: 0, kind: .video),
-            item("Demo edit", daysAgo: 0, kind: .videoProject), item("Mockup", daysAgo: 0, kind: .imageProject)
+            item("Demo edit", daysAgo: 0, kind: .videoProject), item("Mockup", daysAgo: 0, kind: .imageProject),
+            { var gif = item("Loop", daysAgo: 0); gif.filename = "Loop.gif"; return gif }()
         ]
         func titles(_ filter: HistoryFilter, _ query: String = "") -> Set<String> {
             Set(HistorySection.make(items, filter: filter, query: query, now: now, calendar: calendar).flatMap { $0.items.map(\.title) })
         }
         XCTAssertEqual(titles(.screenshots), ["Bug report", "Mockup"])
         XCTAssertEqual(titles(.recordings), ["Demo", "Demo edit"])
+        XCTAssertEqual(titles(.gifs), ["Loop"])
         XCTAssertEqual(titles(.all, "  demo "), ["Demo", "Demo edit"])
         XCTAssertEqual(titles(.screenshots, "demo"), [])
     }

@@ -93,6 +93,13 @@ final class ImageCanvasView: NSView {
         model.refreshPreview()
     }
 
+    func setZoom(_ level: CGFloat) {
+        fitsWindow = false
+        enclosingScrollView?.setMagnification(level, centeredAt: CGPoint(x: visibleRect.midX, y: visibleRect.midY))
+        updateZoomLabel()
+        model.refreshPreview()
+    }
+
     func actualSize() {
         fitsWindow = false
         enclosingScrollView?.setMagnification(1, centeredAt: CGPoint(x: visibleRect.midX, y: visibleRect.midY))
@@ -231,6 +238,13 @@ final class ImageCanvasView: NSView {
             return
         }
         guard document.cropRect.contains(point) else { return }
+        // clicking an existing mark of the active tool picks it up instead of stacking a new one
+        if model.tool != .crop, let hit = document.renderingAnnotations.last(where: { $0.tool == model.tool && $0.hitTest(point, tolerance: 6 / zoom) }) {
+            model.select(hit.id)
+            dragOperation = .move
+            needsDisplay = true
+            return
+        }
         model.selectedIDs = []
         if model.tool == .crop { dragOperation = .crop; return }
         if model.tool == .image { model.importImage(); return }
@@ -444,6 +458,9 @@ final class ImageCanvasView: NSView {
         case 126: model.nudgeSelection(dx: 0, dy: shift ? -10 : -1)
         default:
             if key == " " { spacePressed = true; NSCursor.openHand.set() }
+            else if let digit = Int(key), AnnotationColor.palette.indices.contains(digit - 1) {
+                model.setColor(AnnotationColor.palette[digit - 1])
+            }
             else if let tool = AnnotationTool.allCases.first(where: { $0.keyboardKey == key }) {
                 if tool == .crop { model.select(nil) }
                 model.tool = tool

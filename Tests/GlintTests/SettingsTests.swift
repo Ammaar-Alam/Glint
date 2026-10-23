@@ -144,4 +144,12 @@ final class SettingsTests: XCTestCase {
         XCTAssertEqual(try CaptureFolder.destination(in: folder, name: "Shot", pathExtension: "mp4").lastPathComponent, "Shot.mp4")
         CaptureFolder.release(folder.appendingPathComponent("Shot.mp4"))
     }
+
+    @MainActor
+    func testAnimatedGIFsKeepTheirFormatWhenSaved() {
+        let gif = CaptureItem(id: UUID(), createdAt: Date(), title: "Demo", filename: "Demo.gif", kind: .image)
+        XCTAssertNil(AppDelegate.screenshotFormat(for: gif, source: URL(fileURLWithPath: "/tmp/Demo.gif")))
+        let still = CaptureItem(id: UUID(), createdAt: Date(), title: "Shot", filename: "Shot.png", kind: .image)
+        XCTAssertNotNil(AppDelegate.screenshotFormat(for: still, source: URL(fileURLWithPath: "/tmp/Shot.png")))
+    }
 }

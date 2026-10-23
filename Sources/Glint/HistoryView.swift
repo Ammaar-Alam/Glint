@@ -2,21 +2,24 @@ import SwiftUI
 import AppKit
 
 enum HistoryFilter: String, CaseIterable {
-    case all, screenshots, recordings
+    case all, screenshots, recordings, gifs
 
     var title: String {
         switch self {
         case .all: "All"
         case .screenshots: "Screenshots"
         case .recordings: "Recordings"
+        case .gifs: "GIFs"
         }
     }
 
-    func includes(_ kind: CaptureKind) -> Bool {
+    func includes(_ item: CaptureItem) -> Bool {
+        let gif = item.filename.lowercased().hasSuffix(".gif")
         switch self {
-        case .all: true
-        case .screenshots: !kind.isVideo
-        case .recordings: kind.isVideo
+        case .all: return true
+        case .screenshots: return !item.kind.isVideo && !gif
+        case .recordings: return item.kind.isVideo
+        case .gifs: return gif
         }
     }
 }
@@ -30,7 +33,7 @@ struct HistorySection: Identifiable, Equatable {
         let query = query.trimmingCharacters(in: .whitespacesAndNewlines)
         var sections: [HistorySection] = []
         for item in items.sorted(by: { $0.createdAt > $1.createdAt })
-        where filter.includes(item.kind) && (query.isEmpty || item.title.localizedCaseInsensitiveContains(query)) {
+        where filter.includes(item) && (query.isEmpty || item.title.localizedCaseInsensitiveContains(query)) {
             let title = group(item.createdAt, now: now, calendar: calendar)
             if sections.last?.title == title { sections[sections.count - 1].items.append(item) }
             else { sections.append(HistorySection(title: title, items: [item])) }
@@ -136,10 +139,6 @@ struct HistoryView: View {
             CapsulePicker(selection: $filter, options: HistoryFilter.allCases, title: \.title)
             Spacer(minLength: 16)
             searchField
-            Button("Open", systemImage: "folder", action: onImport)
-                .labelStyle(.iconOnly)
-                .buttonStyle(ToolButtonStyle())
-                .help("Open")
             Button(action: onCapture) {
                 Label("Capture", systemImage: "viewfinder").labelStyle(.titleAndIcon)
             }
@@ -236,12 +235,12 @@ struct HistoryView: View {
                 Text("Nothing matches “\(query)”").font(.system(size: 13)).foregroundStyle(.secondary)
             }
         } else {
-            let recordings = filter == .recordings
+            let recordings = filter == .recordings || filter == .gifs
             let shortcut = shortcuts.shortcuts[recordings ? .record : .area]
             VStack(spacing: 0) {
                 EmptyStack(symbol: recordings ? "record.circle" : "viewfinder")
                     .padding(.bottom, 26)
-                Text(recordings ? "No recordings yet" : filter == .screenshots ? "No screenshots yet" : "No captures yet")
+                Text(filter == .gifs ? "No GIFs yet" : recordings ? "No recordings yet" : filter == .screenshots ? "No screenshots yet" : "No captures yet")
                     .font(.system(size: 17, weight: .semibold))
                 if let shortcut {
                     HStack(spacing: 4) {
