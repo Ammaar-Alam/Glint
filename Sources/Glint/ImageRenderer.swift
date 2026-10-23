@@ -113,7 +113,7 @@ enum ImageRenderer {
         context.setLineJoin(.round)
         let rect = item.rect.standardized
         switch item.tool {
-        case .line, .arrow, .curvedArrow, .pen:
+        case .line, .arrow, .doubleArrow, .curvedArrow, .pen:
             guard let start = item.points.first, let end = item.points.last else { return }
             context.beginPath()
             context.move(to: start)
@@ -130,14 +130,16 @@ enum ImageRenderer {
                 context.addLine(to: end)
             } else { item.points.dropFirst().forEach { context.addLine(to: $0) } }
             context.strokePath()
-            if item.tool == .arrow || item.tool == .curvedArrow {
-                let angle = atan2(end.y - arrowFrom.y, end.x - arrowFrom.x)
-                let length = max(12, item.lineWidth * 3.5)
-                context.move(to: CGPoint(x: end.x - length * cos(angle - .pi / 6), y: end.y - length * sin(angle - .pi / 6)))
-                context.addLine(to: end)
-                context.addLine(to: CGPoint(x: end.x - length * cos(angle + .pi / 6), y: end.y - length * sin(angle + .pi / 6)))
+            let length = max(12, item.lineWidth * 3.5)
+            func head(at tip: CGPoint, from tail: CGPoint) {
+                let angle = atan2(tip.y - tail.y, tip.x - tail.x)
+                context.move(to: CGPoint(x: tip.x - length * cos(angle - .pi / 6), y: tip.y - length * sin(angle - .pi / 6)))
+                context.addLine(to: tip)
+                context.addLine(to: CGPoint(x: tip.x - length * cos(angle + .pi / 6), y: tip.y - length * sin(angle + .pi / 6)))
                 context.strokePath()
             }
+            if [.arrow, .doubleArrow, .curvedArrow].contains(item.tool) { head(at: end, from: arrowFrom) }
+            if item.tool == .doubleArrow { head(at: start, from: end) }
         case .rectangle:
             if item.filled { context.fill(rect) } else { context.stroke(rect) }
         case .ellipse:

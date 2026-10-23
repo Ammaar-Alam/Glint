@@ -110,8 +110,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         if NSApp.activationPolicy() != policy { NSApp.setActivationPolicy(policy) }
     }
 
+    // the dock icon returns to open windows and only shows home when none are open
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
-        showHome()
+        if !flag { showHome() }
         return true
     }
 
