@@ -319,7 +319,7 @@ final class SelectionController {
     }
 
     private func startMagnifier() {
-        guard magnifierProvider != nil || !frozenFrames.isEmpty else { return }
+        guard UserDefaults.standard.bool(forKey: "showMagnifier"), magnifierProvider != nil || !frozenFrames.isEmpty else { return }
         magnifierTask = Task { [weak self] in
             while !Task.isCancelled {
                 guard let self, self.continuation != nil else { return }
@@ -359,7 +359,7 @@ final class SelectionController {
             view.caption = selectedWindow?.title.flatMap { $0.isEmpty ? nil : $0 } ?? selectedWindow?.owningApplication?.applicationName
             view.isWindowSelection = isWindowSelection
             view.showsFrozenBackground = mode != .window && mode != .scrolling
-            view.showsMagnifier = !isWindowSelection && mode != .fullScreen && view.screenFrame.contains(pointer)
+            view.showsMagnifier = magnifierTask != nil && !isWindowSelection && mode != .fullScreen && view.screenFrame.contains(pointer)
             if let selection { view.setAccessibilityValue("\(Int(selection.width)) by \(Int(selection.height))") }
             view.needsDisplay = true
         }

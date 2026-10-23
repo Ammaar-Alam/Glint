@@ -134,14 +134,19 @@ final class QuickAccessPanel: NSPanel {
         if !shelf.ids.isEmpty { show(); startDismissTimer() }
     }
 
-    private static let cardSize = CGSize(width: 232, height: 146)
+    static let baseCardSize = CGSize(width: 232, height: 146)
+    nonisolated static var cardScale: CGFloat {
+        let value = UserDefaults.standard.double(forKey: "shelfScale")
+        return value > 0 ? min(1.5, max(0.75, value)) : 1
+    }
+    private static var cardSize: CGSize { CGSize(width: (baseCardSize.width * cardScale).rounded(), height: (baseCardSize.height * cardScale).rounded()) }
     private static let gap: CGFloat = 10
     // room for card shadows inside the transparent panel
     private static let inset: CGFloat = 14
 
-    static func cardsThatFit(height: CGFloat, footer: Bool) -> Int {
+    static func cardsThatFit(height: CGFloat, footer: Bool, scale: CGFloat = cardScale) -> Int {
         let footerHeight = footer ? HUDButton.compactHeight + gap : 0
-        let fitting = Int((height - inset * 2 - footerHeight + gap) / (cardSize.height + gap))
+        let fitting = Int((height - inset * 2 - footerHeight + gap) / ((baseCardSize.height * scale).rounded() + gap))
         return max(1, min(4, fitting))
     }
 
@@ -155,7 +160,9 @@ final class QuickAccessPanel: NSPanel {
         let position = UserDefaults.standard.string(forKey: "shelfPosition") ?? "bottomLeft"
         let right = position.contains("Right")
         let bottom = !position.hasPrefix("top")
-        let screen = (isVisible ? self.screen : nil) ?? NSScreen.screens.first(where: { $0.frame.contains(NSEvent.mouseLocation) }) ?? NSScreen.main ?? NSScreen.screens.first
+        let pointer = NSScreen.screens.first(where: { $0.frame.contains(NSEvent.mouseLocation) })
+        let preferred = UserDefaults.standard.bool(forKey: "shelfFollowsPointer") ? pointer : NSScreen.screens.first
+        let screen = (isVisible ? self.screen : nil) ?? preferred ?? NSScreen.main ?? NSScreen.screens.first
         let visible = screen?.visibleFrame ?? CGRect(x: 0, y: 0, width: 1024, height: 768)
         // show only as many cards as the screen fits, the footer opens the rest in history
         let shown = Self.cardsThatFit(height: visible.height, footer: shelf.ids.count > 1)
@@ -208,6 +215,10 @@ final class QuickAccessPanel: NSPanel {
         card.thumbnail.onDrag = { [weak self] dragging in
             self?.isDraggingCapture = dragging
             self?.lastInteraction = Date()
+        }
+        card.thumbnail.onDropped = { [weak self] in
+            guard UserDefaults.standard.bool(forKey: "shelfCloseAfterDrag") else { return }
+            Task { @MainActor in self?.dismiss(item) }
         }
         var center: [HUDButton] = []
         if item.kind != .videoProject {
@@ -424,6 +435,7 @@ final class CaptureDragView: NSView, NSDraggingSource {
     var image: NSImage? { didSet { layer?.contents = image } }
     var onOpen: (() -> Void)?
     var onDrag: ((Bool) -> Void)?
+    var onDropped: (() -> Void)?
     private var downEvent: NSEvent?
     private var startedDragging = false
 
@@ -460,6 +472,7 @@ final class CaptureDragView: NSView, NSDraggingSource {
     func draggingSession(_ session: NSDraggingSession, sourceOperationMaskFor context: NSDraggingContext) -> NSDragOperation { .copy }
     func draggingSession(_ session: NSDraggingSession, endedAt screenPoint: NSPoint, operation: NSDragOperation) {
         onDrag?(false)
+        if operation != [] { onDropped?() }
         downEvent = nil
         startedDragging = false
     }

@@ -140,8 +140,8 @@ struct ShortcutRecorder: NSViewRepresentable {
     }
 
     func updateNSView(_ button: ShortcutButton, context: Context) {
-        button.shortcutTitle = manager.shortcuts[action]?.label ?? "Set shortcut"
-        if !button.isRecording { button.title = button.shortcutTitle }
+        button.shortcutTitle = manager.shortcuts[action]?.label ?? ""
+        if !button.isRecording { button.showShortcut() }
     }
 
     static func dismantleNSView(_ button: ShortcutButton, coordinator: ()) { button.finish() }
@@ -151,7 +151,7 @@ struct ShortcutRecorder: NSViewRepresentable {
 final class ShortcutButton: NSButton {
     var onCapture: ((KeyboardShortcut?) -> Void)?
     var onRecording: ((Bool) -> Void)?
-    var shortcutTitle = "Set shortcut"
+    var shortcutTitle = ""
     private(set) var isRecording = false
     override var acceptsFirstResponder: Bool { true }
 
@@ -191,7 +191,15 @@ final class ShortcutButton: NSButton {
     func finish() {
         guard isRecording else { return }
         isRecording = false
-        title = shortcutTitle
+        showShortcut()
         onRecording?(false)
+    }
+
+    func showShortcut() {
+        if shortcutTitle.isEmpty {
+            attributedTitle = NSAttributedString(string: "Record Shortcut", attributes: [.foregroundColor: NSColor.secondaryLabelColor, .font: NSFont.systemFont(ofSize: NSFont.systemFontSize)])
+        } else {
+            title = shortcutTitle
+        }
     }
 }
