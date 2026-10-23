@@ -129,7 +129,12 @@ final class CaptureTests: XCTestCase {
         let url = FileManager.default.temporaryDirectory.appendingPathComponent("Glint-OCR-test-\(UUID().uuidString).png")
         defer { try? FileManager.default.removeItem(at: url) }
         try ImageFile.write(image, to: url)
-        let recognized = try await OCRService.recognize(url: url)
+        let recognized: String
+        do { recognized = try await OCRService.recognize(url: url) }
+        catch let error as NSError where error.domain == NSCocoaErrorDomain && error.code == NSFileReadNoSuchFileError {
+            // virtual machines without Vision's on-device models cannot run recognition
+            throw XCTSkip("Vision models are not installed: \(error.localizedDescription)")
+        }
         XCTAssertTrue(recognized.contains("Glint capture check"))
     }
 
