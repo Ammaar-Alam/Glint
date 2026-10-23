@@ -32,6 +32,9 @@ struct AnnotationColor: Codable, Equatable, Sendable {
     var isValid: Bool { [red, green, blue, alpha].allSatisfy { $0.isFinite && (0...1).contains($0) } }
 }
 
+// how an arrow is drawn, projects from before styles keep the open head
+enum ArrowStyle: String, Codable, Sendable { case tapered, solid, open }
+
 enum AnnotationTool: String, CaseIterable, Identifiable, Codable, Sendable {
     case select, arrow, doubleArrow, curvedArrow, line, rectangle, ellipse, pen, text, counter
     case highlight, spotlight, pixelate, blur, redact, crop, image
@@ -86,7 +89,7 @@ enum AnnotationTool: String, CaseIterable, Identifiable, Codable, Sendable {
         case .select: return "v"
         case .arrow: return "a"
         case .doubleArrow: return nil
-        case .curvedArrow: return "u"
+        case .curvedArrow: return nil
         case .line: return "l"
         case .rectangle: return "r"
         case .ellipse: return "o"
@@ -118,6 +121,7 @@ struct ImageAnnotation: Codable, Equatable, Identifiable, Sendable {
     var italic = false
     var number = 1
     var imageID: UUID?
+    var arrowStyle: ArrowStyle?
 
     var bounds: CGRect {
         guard !points.isEmpty else { return rect.standardized }
