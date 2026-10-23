@@ -360,3 +360,8 @@ struct FlatTextFieldStyle: TextFieldStyle {
             .background(Color.primary.opacity(0.06), in: RoundedRectangle(cornerRadius: Radius.control, style: .continuous))
     }
 }
+
+// content under a full-size title bar must not drag the window, a bar's empty background does that instead
+final class StaticHostingView<Content: View>: NSHostingView<Content> {
+    override var mouseDownCanMoveWindow: Bool { false }
+}
