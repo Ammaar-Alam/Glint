@@ -383,4 +383,14 @@ final class ImageEditorTests: XCTestCase {
         XCTAssertEqual(model.document?.background.padding, ImageBackground().padding)
         XCTAssertFalse(model.undoManager.canUndo)
     }
+
+    func testStrokesHitOnlyNearTheLine() {
+        var arrow = ImageAnnotation(tool: .arrow, rect: .zero)
+        arrow.points = [CGPoint(x: 0, y: 0), CGPoint(x: 100, y: 100)]
+        arrow.lineWidth = 4
+        XCTAssertTrue(arrow.hitTest(CGPoint(x: 50, y: 52), tolerance: 4))
+        XCTAssertFalse(arrow.hitTest(CGPoint(x: 90, y: 10), tolerance: 4))
+        let box = ImageAnnotation(tool: .rectangle, rect: CGRect(x: 0, y: 0, width: 100, height: 100))
+        XCTAssertTrue(box.hitTest(CGPoint(x: 90, y: 10), tolerance: 4))
+    }
 }

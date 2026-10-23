@@ -240,7 +240,7 @@ final class ImageCanvasView: NSView {
         }
         guard document.cropRect.contains(point) else { return }
         // clicking an existing mark of the active tool picks it up instead of stacking a new one
-        if model.tool != .crop, let hit = document.renderingAnnotations.last(where: { $0.tool == model.tool && $0.bounds.insetBy(dx: -6 / zoom, dy: -6 / zoom).contains(point) }) {
+        if model.tool != .crop, let hit = document.renderingAnnotations.last(where: { $0.tool == model.tool && $0.hitTest(point, tolerance: 6 / zoom) }) {
             model.select(hit.id)
             dragOperation = .move
             needsDisplay = true

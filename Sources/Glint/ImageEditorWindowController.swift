@@ -171,6 +171,8 @@ final class ImageEditorWindowController: NSWindowController, NSWindowDelegate, E
                     return folder.appendingPathComponent(model.inputURL.deletingPathExtension().lastPathComponent).appendingPathExtension("glint")
                 }()
                 try await model.saveProject(to: destination)
+                // edits made while saving keep the editor open
+                guard !model.hasUnsavedChanges else { return }
                 closingAfterSave = true
                 close()
             } catch { model.errorMessage = error.localizedDescription }
@@ -432,7 +434,7 @@ private struct ImageEditorView: View {
         .padding(.horizontal, 12)
         .frame(height: 44)
         .background(.bar)
-        .disabled(model.document == nil)
+        .disabled(model.document == nil || model.busy)
     }
 
     private var zoomMenu: some View {
