@@ -231,6 +231,13 @@ final class ImageCanvasView: NSView {
             return
         }
         guard document.cropRect.contains(point) else { return }
+        // clicking an existing mark of the active tool picks it up instead of stacking a new one
+        if model.tool != .crop, let hit = document.renderingAnnotations.last(where: { $0.tool == model.tool && $0.bounds.insetBy(dx: -6 / zoom, dy: -6 / zoom).contains(point) }) {
+            model.select(hit.id)
+            dragOperation = .move
+            needsDisplay = true
+            return
+        }
         model.selectedIDs = []
         if model.tool == .crop { dragOperation = .crop; return }
         if model.tool == .image { model.importImage(); return }

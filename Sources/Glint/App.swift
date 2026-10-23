@@ -34,6 +34,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var recordingTask: Task<Void, Never>?
     private var statusTimer: Timer?
     private var closeObserver: NSObjectProtocol?
+    private var keyObserver: NSObjectProtocol?
     private var pinsVisible = true
     private var terminationTask: Task<Void, Never>?
     private var pendingWrites = 0
@@ -79,7 +80,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             MainActor.assumeIsolated {
                 guard let window = notification.object as? NSWindow else { return }
                 self?.editors.removeAll { $0.window === window }
+                self?.updateDock(closing: window)
             }
+        }
+        keyObserver = NotificationCenter.default.addObserver(forName: NSWindow.didBecomeKeyNotification, object: nil, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated { self?.updateDock() }
         }
         statusTimer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in
             MainActor.assumeIsolated { self?.updateStatus() }
@@ -93,6 +98,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             } catch { library.error = error.localizedDescription }
             if !launchInBackground { showHome() }
         }
+    }
+
+    // a dock icon while a window is open, menu bar only otherwise
+    private func updateDock(closing: NSWindow? = nil) {
+        let open = NSApp.windows.contains { $0 !== closing && $0.isVisible && !($0 is NSPanel) && $0.styleMask.contains(.titled) }
+        let policy: NSApplication.ActivationPolicy = open ? .regular : .accessory
+        if NSApp.activationPolicy() != policy { NSApp.setActivationPolicy(policy) }
     }
 
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
@@ -178,6 +190,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         statusTimer?.invalidate()
         captureTask?.cancel()
         if let closeObserver { NotificationCenter.default.removeObserver(closeObserver) }
+        if let keyObserver { NotificationCenter.default.removeObserver(keyObserver) }
     }
 
     func menuWillOpen(_ menu: NSMenu) {
