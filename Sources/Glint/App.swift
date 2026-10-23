@@ -65,10 +65,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 self?.showRecordingSetup()
             }
         }
-        shelf.onEdit = { [weak self] in self?.edit($0) }
-        shelf.onCopy = { [weak self] in self?.copy($0) }
-        shelf.onSave = { [weak self] in self?.save($0) }
-        shelf.onPin = { [weak self] in self?.pin($0) }
+        shelf.onCommand = { [weak self] in self?.perform($0, on: $1) }
         shelf.onHistory = { [weak self] in self?.showHistory() }
         recorder.onFailure = { [weak self] error in
             guard let self else { return }
@@ -358,13 +355,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     private func saveToFolder(_ item: CaptureItem, folder: URL) {
-        guard let source = item.shareURL(in: library.root) else { return }
-        let format = ScreenshotFormat.current
+        guard let source = item.shareURL(in: library.root) else { edit(item); return }
+        let format = item.kind.isVideo ? nil : ScreenshotFormat.current
         pendingWrites += 1
         Task {
             defer { pendingWrites -= 1 }
-            do { _ = try await Task.detached { try CaptureFolder.saveImage(source, named: item.title, format: format, in: folder) }.value }
-            catch { showError(error) }
+            do {
+                try await Task.detached {
+                    if let format { _ = try CaptureFolder.saveImage(source, named: item.title, format: format, in: folder) }
+                    else { _ = try CaptureFolder.saveFile(source, named: item.title, in: folder) }
+                }.value
+            } catch { showError(error) }
         }
     }
 
@@ -538,6 +539,31 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
     }
 
+    func perform(_ command: CaptureCommand, on item: CaptureItem) {
+        // projects reveal and share their flattened render, never the package
+        let file = item.shareURL(in: library.root) ?? item.url(in: library.root)
+        switch command {
+        case .copy: copy(item)
+        case .save: saveToFolder(item, folder: CaptureFolder.current ?? URL.desktopDirectory)
+        case .saveAs: save(item)
+        case .edit: edit(item)
+        case .pin: pin(item)
+        case .reveal: NSWorkspace.shared.activateFileViewerSelecting([file])
+        case .copyPath:
+            clipboardTask?.cancel()
+            let clipboard = ClipboardWriter.general
+            clipboard.commit(clipboard.begin()) { _ = $0.setString(file.path, forType: .string) }
+        case .trash:
+            Task {
+                do {
+                    try await library.trash(item)
+                    if shelf.shelf.ids.contains(item.id) { shelf.dismiss(item) }
+                } catch { showError(error) }
+            }
+        case .rename, .close, .closeAll: break
+        }
+    }
+
     func pin(_ item: CaptureItem) {
         Task { [self] in
             do {
@@ -568,10 +594,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     func showHistory() {
         if historyWindow == nil {
-            historyWindow = makeWindow(title: "Glint", size: NSSize(width: 960, height: 640), root: HistoryView(
-                library: library, onEdit: edit, onCopy: copy, onSave: save, onPin: pin, onImport: openFile,
-                onCapture: { [weak self] in self?.takeCapture(.area) }
+            let window = makeWindow(title: "Glint", size: NSSize(width: 1000, height: 680), root: HistoryView(
+                library: library, shortcuts: shortcuts, onCommand: { [weak self] in self?.perform($0, on: $1) }, onImport: openFile,
+                onCapture: { [weak self] in self?.takeCapture(.area) }, onRecord: { [weak self] in self?.showRecordingSetup() }
             ))
+            // an empty unified toolbar only sets the titlebar height, the view draws the bar
+            window.styleMask.insert(.fullSizeContentView)
+            window.titlebarAppearsTransparent = true
+            window.titleVisibility = .hidden
+            window.toolbar = NSToolbar()
+            window.toolbarStyle = .unified
+            historyWindow = window
         }
         historyWindow?.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
@@ -753,6 +786,8 @@ enum ExportFile {
             throw error
         }
     }
+
+    // the first free name, numbered the way Finder does
 }
 
 struct OCRResultView: View {
