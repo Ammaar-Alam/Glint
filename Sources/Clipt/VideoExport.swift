@@ -162,6 +162,8 @@ enum VideoExporter {
                                      progress: @escaping @Sendable (Double) -> Void) async throws {
         guard let session = AVAssetExportSession(asset: composition.asset, presetName: AVAssetExportPresetPassthrough),
               session.supportedFileTypes.contains(.mov) else { throw CliptError.message("This source can’t be exported without conversion. Choose MP4 instead.") }
+        // cancellation is supported during export while session configuration stays local
+        nonisolated(unsafe) let cancellationSession = session
         let monitor = Task {
             for await state in session.states(updateInterval: 0.15) {
                 if case .exporting(let value) = state { progress(min(0.99, value.fractionCompleted)) }
@@ -171,7 +173,7 @@ enum VideoExporter {
         try await withTaskCancellationHandler {
             try await session.export(to: destination, as: .mov)
             try Task.checkCancellation()
-        } onCancel: { session.cancelExport() }
+        } onCancel: { cancellationSession.cancelExport() }
     }
 
     private static func encodeGIF(composition: VideoCompositionResult, project: VideoProject, destination: URL, frameRate: Int,
