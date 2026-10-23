@@ -17,6 +17,10 @@
   <img src="assets/readme/editor.png" alt="The Glint editor with arrows, counters, a highlight and pixelated emails on a gradient background" width="880">
 </p>
 
+<p align="center">
+  <a href="assets/readme/launch.mp4"><img src="assets/readme/launch.jpg" alt="Watch Glint in 20 seconds" width="660"></a>
+</p>
+
 ## Capture, then keep going
 
 Press <kbd>⇧⌘4</kbd> and your capture lands in the corner. Hover to copy, save, pin or edit, or drag it straight into any app.
