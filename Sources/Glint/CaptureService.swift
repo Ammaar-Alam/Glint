@@ -16,6 +16,17 @@ enum CaptureMode: String, CaseIterable, Identifiable {
         case .text: return "Capture Text"
         }
     }
+    var symbol: String {
+        switch self {
+        case .allInOne: return "square.dashed.inset.filled"
+        case .area: return "rectangle.dashed"
+        case .window: return "macwindow"
+        case .fullScreen: return "display"
+        case .previousArea: return "arrow.counterclockwise"
+        case .scrolling: return "arrow.up.and.down.square"
+        case .text: return "text.viewfinder"
+        }
+    }
 }
 
 struct CaptureResult {

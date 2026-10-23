@@ -45,7 +45,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let launchReason = launchEvent?.paramDescriptor(forKeyword: keyAEPropData)?.enumCodeValue
         let launchInBackground = launchEvent?.eventID == kAEOpenApplication &&
             (launchReason == keyAELaunchedAsLogInItem || launchReason == keyAELaunchedAsServiceItem)
-        UserDefaults.standard.register(defaults: ["windowShadow": true, "afterCapture": "popup", "shelfPosition": "bottomLeft", "filenameTemplate": "Glint {date} at {time}"])
+        UserDefaults.standard.register(defaults: ["windowShadow": true, "afterCapture": "popup", "shelfPosition": "bottomLeft", "filenameTemplate": "Glint {date} at {time}", "showMenuBarIcon": true])
         makeMainMenu()
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         statusItem.button?.image = Self.menuBarIcon
@@ -54,6 +54,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         menu.delegate = self
         statusItem.menu = menu
         rebuildMenu(menu)
+        updateStatus()
         shortcuts.onAction = { [weak self] in self?.perform($0) }
         shortcuts.start()
         capture.onRecord = { [weak self] in
@@ -90,13 +91,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 let recovered = try await RecordingController.recoverInterruptedRecordings()
                 for url in recovered { importRecording(url, openEditor: false) }
             } catch { library.error = error.localizedDescription }
-            if !launchInBackground { showHistory() }
+            if !launchInBackground { showHome() }
         }
     }
 
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
-        showHistory()
+        showHome()
         return true
+    }
+
+    // with the menu bar icon hidden, opening the app is the way back to settings
+    private func showHome() {
+        if UserDefaults.standard.bool(forKey: "showMenuBarIcon") { showHistory() } else { showSettings() }
     }
 
     func application(_ sender: NSApplication, openFiles filenames: [String]) {
@@ -185,33 +191,45 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         menu.removeAllItems()
         addCaptureCommands(to: menu)
         menu.addItem(.separator())
-        menu.addItem(HandlerMenuItem("Open File…", key: "o") { [weak self] in self?.openFile() })
-        menu.addItem(HandlerMenuItem("Open Clipboard") { [weak self] in self?.openClipboard() })
-        menu.addItem(HandlerMenuItem("History…") { [weak self] in self?.showHistory() })
-        menu.addItem(HandlerMenuItem("Reopen Last Popup") { [weak self] in self?.shelf.reopenLast() })
+        menu.addItem(HandlerMenuItem("Open File…", key: "o", symbol: "folder") { [weak self] in self?.openFile() })
+        menu.addItem(HandlerMenuItem("Open Clipboard", symbol: "doc.on.clipboard") { [weak self] in self?.openClipboard() })
+        let history = HandlerMenuItem("History", symbol: "clock") { [weak self] in self?.showHistory() }
+        history.show(shortcuts.shortcuts[.history])
+        menu.addItem(history)
+        menu.addItem(HandlerMenuItem("Reopen Last Popup", symbol: "rectangle.stack") { [weak self] in self?.shelf.reopenLast() })
         if !pins.isEmpty {
-            menu.addItem(HandlerMenuItem(pinsVisible ? "Hide Pins" : "Show Pins") { [weak self] in self?.togglePins() })
-            menu.addItem(HandlerMenuItem("Unlock Pins") { [weak self] in self?.pins.forEach { $0.ignoresMouseEvents = false } })
-            menu.addItem(HandlerMenuItem("Close Pins") { [weak self] in self?.pins.forEach { $0.close() } })
+            let pinMenu = NSMenu()
+            pinMenu.addItem(HandlerMenuItem(pinsVisible ? "Hide Pins" : "Show Pins") { [weak self] in self?.togglePins() })
+            pinMenu.addItem(HandlerMenuItem("Unlock Pins") { [weak self] in self?.pins.forEach { $0.ignoresMouseEvents = false } })
+            pinMenu.addItem(HandlerMenuItem("Close Pins") { [weak self] in self?.pins.forEach { $0.close() } })
+            let pinItem = NSMenuItem(title: "Pins", action: nil, keyEquivalent: "")
+            pinItem.image = NSImage(systemSymbolName: "pin", accessibilityDescription: nil)
+            pinItem.submenu = pinMenu
+            menu.addItem(pinItem)
         }
         menu.addItem(.separator())
-        menu.addItem(HandlerMenuItem("Settings…", key: ",") { [weak self] in self?.showSettings() })
-        menu.addItem(HandlerMenuItem("About Glint") { NSApp.orderFrontStandardAboutPanel(nil); NSApp.activate(ignoringOtherApps: true) })
-        menu.addItem(HandlerMenuItem("Quit Glint", key: "q") { NSApp.terminate(nil) })
+        menu.addItem(HandlerMenuItem("Settings…", key: ",", symbol: "gearshape") { [weak self] in self?.showSettings() })
+        menu.addItem(HandlerMenuItem("About Glint", symbol: "info.circle") { NSApp.orderFrontStandardAboutPanel(nil); NSApp.activate(ignoringOtherApps: true) })
+        menu.addItem(HandlerMenuItem("Quit Glint", key: "q", symbol: "power") { NSApp.terminate(nil) })
     }
 
     private func addCaptureCommands(to menu: NSMenu) {
         for mode in CaptureMode.allCases {
-            let item = HandlerMenuItem(mode.title) { [weak self] in self?.takeCapture(mode) }
+            let item = HandlerMenuItem(mode.title, symbol: mode.symbol) { [weak self] in self?.takeCapture(mode) }
+            item.show(ShortcutAction(rawValue: mode.rawValue).flatMap { shortcuts.shortcuts[$0] })
             item.isEnabled = captureTask == nil && !capture.isCapturing && recorder.state == .idle
             menu.addItem(item)
         }
         menu.addItem(.separator())
         if recorder.state == .recording || recorder.state == .paused {
-            menu.addItem(HandlerMenuItem("Stop Recording") { [weak self] in self?.stopRecording() })
-            menu.addItem(HandlerMenuItem(recorder.state == .paused ? "Resume Recording" : "Pause Recording") { [weak self] in self?.togglePause() })
+            let stop = HandlerMenuItem("Stop Recording", symbol: "stop.circle") { [weak self] in self?.stopRecording() }
+            stop.show(shortcuts.shortcuts[.record])
+            menu.addItem(stop)
+            menu.addItem(HandlerMenuItem(recorder.state == .paused ? "Resume Recording" : "Pause Recording",
+                                         symbol: recorder.state == .paused ? "play.circle" : "pause.circle") { [weak self] in self?.togglePause() })
         } else {
-            let record = HandlerMenuItem("Record Screen…") { [weak self] in self?.showRecordingSetup() }
+            let record = HandlerMenuItem("Record Screen…", symbol: "record.circle") { [weak self] in self?.showRecordingSetup() }
+            record.show(shortcuts.shortcuts[.record])
             record.isEnabled = recorder.state == .idle
             menu.addItem(record)
         }
@@ -599,6 +617,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     private func updateStatus() {
+        // recording controls stay reachable even when the icon is hidden
+        let visible = recorder.state != .idle || UserDefaults.standard.bool(forKey: "showMenuBarIcon")
+        if statusItem.isVisible != visible { statusItem.isVisible = visible }
         if recorder.state == .recording || recorder.state == .paused {
             statusItem.button?.image = NSImage(systemSymbolName: recorder.state == .paused ? "pause.circle.fill" : "record.circle.fill", accessibilityDescription: "Recording")
             statusItem.button?.title = " " + Self.duration(recorder.elapsed)

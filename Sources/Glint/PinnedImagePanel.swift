@@ -1,4 +1,5 @@
 import AppKit
+import Carbon
 
 @MainActor
 final class PinnedImagePanel: NSPanel, NSWindowDelegate {
@@ -86,10 +87,22 @@ private final class PinnedImageView: NSImageView {
 @MainActor
 final class HandlerMenuItem: NSMenuItem {
     private let handler: () -> Void
-    init(_ title: String, key: String = "", handler: @escaping () -> Void) {
+    init(_ title: String, key: String = "", symbol: String? = nil, handler: @escaping () -> Void) {
         self.handler = handler
         super.init(title: title, action: #selector(invoke), keyEquivalent: key)
         target = self
+        if let symbol { image = NSImage(systemSymbolName: symbol, accessibilityDescription: nil) }
+    }
+
+    func show(_ shortcut: KeyboardShortcut?) {
+        guard let shortcut else { return }
+        keyEquivalent = shortcut.key.lowercased()
+        var mask: NSEvent.ModifierFlags = []
+        if shortcut.modifiers & UInt32(controlKey) != 0 { mask.insert(.control) }
+        if shortcut.modifiers & UInt32(optionKey) != 0 { mask.insert(.option) }
+        if shortcut.modifiers & UInt32(shiftKey) != 0 { mask.insert(.shift) }
+        if shortcut.modifiers & UInt32(cmdKey) != 0 { mask.insert(.command) }
+        keyEquivalentModifierMask = mask
     }
     required init(coder: NSCoder) { fatalError("init(coder:) is not supported") }
     @objc private func invoke() { handler() }

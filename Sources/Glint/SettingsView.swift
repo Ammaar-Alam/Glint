@@ -17,6 +17,7 @@ struct SettingsView: View {
     @AppStorage("retentionDays") private var retention = 0
     @AppStorage("captureSound") private var sound = false
     @AppStorage("automationEnabled") private var automation = false
+    @AppStorage("showMenuBarIcon") private var showMenuBarIcon = true
     @State private var login = SMAppService.mainApp.status == .enabled
     @State private var error: String?
 
@@ -61,6 +62,10 @@ struct SettingsView: View {
                                 else { Task { do { try await SMAppService.mainApp.unregister() } catch { self.error = error.localizedDescription } } }
                             } catch { self.error = error.localizedDescription; login = false }
                         }
+                    Toggle("Show menu bar icon", isOn: $showMenuBarIcon)
+                    if !showMenuBarIcon {
+                        Text("Open Glint again to get back to Settings.").font(.caption).foregroundStyle(.secondary)
+                    }
                     Toggle("Allow capture URLs", isOn: $automation)
                     Text("Allows glint:// commands to start captures. Keep off unless you use an automation tool.")
                         .font(.caption).foregroundStyle(.secondary)
