@@ -14,10 +14,8 @@ concurrency:
 
 jobs:
   macos:
-    runs-on: macos-15
+    runs-on: xcode-27
     timeout-minutes: 15
-    env:
-      DEVELOPER_DIR: /Applications/Xcode_16.4.app/Contents/Developer
     steps:
       - uses: actions/checkout@v7.0.1
       - name: Toolchain
