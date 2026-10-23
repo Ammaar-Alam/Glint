@@ -50,7 +50,7 @@ Projects keep the original pixels under redactions. Share exported images, not p
 
 ## Build
 
-Requires macOS 15 and Xcode 16.4 or later.
+Requires macOS 27 and Xcode 27.
 
 ```sh
 scripts/build-app.sh
