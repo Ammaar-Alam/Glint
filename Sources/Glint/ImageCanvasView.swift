@@ -15,7 +15,9 @@ final class ImageCanvasView: NSView {
     private var textEditor: AnnotationTextView?
     private var textContainer: NSScrollView?
     private var editingAnnotation: ImageAnnotation?
-    private var didInitialFit = false
+    // stays fitted to the window until the user zooms
+    private var fitsWindow = true
+    private var observers: [NSObjectProtocol] = []
 
     private enum DragOperation {
         case draw(UUID), move, resize(Int, CGRect), marquee, crop, pan
@@ -48,22 +50,32 @@ final class ImageCanvasView: NSView {
         guard let document = model.document else { return }
         let newSize = CGSize(width: document.canvasSize.width + 80, height: document.canvasSize.height + 80)
         if frame.size != newSize { setFrameSize(newSize) }
-        if !didInitialFit, window != nil {
-            didInitialFit = true
-            fitToWindow()
-        }
+        if fitsWindow, window != nil { fitToWindow() }
         needsDisplay = true
     }
 
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
+        observers.forEach(NotificationCenter.default.removeObserver)
+        observers.removeAll()
+        if let scroll = enclosingScrollView, window != nil {
+            scroll.postsFrameChangedNotifications = true
+            observers.append(NotificationCenter.default.addObserver(forName: NSView.frameDidChangeNotification, object: scroll, queue: .main) { [weak self] _ in
+                MainActor.assumeIsolated { if self?.fitsWindow == true { self?.fitToWindow() } }
+            })
+            observers.append(NotificationCenter.default.addObserver(forName: NSScrollView.willStartLiveMagnifyNotification, object: scroll, queue: .main) { [weak self] _ in
+                MainActor.assumeIsolated { self?.fitsWindow = false }
+            })
+        }
         updateCanvasSize()
     }
 
     func fitToWindow() {
         updateCanvasSizeWithoutFitting()
         guard let scroll = enclosingScrollView, model.document != nil else { return }
-        scroll.magnify(toFit: bounds)
+        fitsWindow = true
+        // leave room for the floating options and zoom controls
+        scroll.magnify(toFit: bounds.insetBy(dx: -24, dy: -56))
         updateZoomLabel()
     }
 
@@ -74,6 +86,7 @@ final class ImageCanvasView: NSView {
 
     func zoom(by factor: CGFloat) {
         guard let scroll = enclosingScrollView else { return }
+        fitsWindow = false
         scroll.setMagnification(min(scroll.maxMagnification, max(scroll.minMagnification, zoom * factor)),
                                 centeredAt: CGPoint(x: visibleRect.midX, y: visibleRect.midY))
         updateZoomLabel()
@@ -81,6 +94,7 @@ final class ImageCanvasView: NSView {
     }
 
     func actualSize() {
+        fitsWindow = false
         enclosingScrollView?.setMagnification(1, centeredAt: CGPoint(x: visibleRect.midX, y: visibleRect.midY))
         updateZoomLabel()
         model.refreshPreview()
@@ -89,10 +103,15 @@ final class ImageCanvasView: NSView {
     func updateZoomLabel() { model.zoomLabel = "\(Int((zoom * 100).rounded()))%" }
 
     override func draw(_ dirtyRect: NSRect) {
-        NSColor.windowBackgroundColor.setFill()
+        NSColor.backdrop.setFill()
         dirtyRect.fill()
         guard let document = model.document, let context = NSGraphicsContext.current?.cgContext else { return }
         let imageRect = canvasRect
+        context.saveGState()
+        context.setShadow(offset: CGSize(width: 0, height: -3 / zoom), blur: 24 / zoom, color: CGColor(gray: 0, alpha: 0.28))
+        context.setFillColor(CGColor(gray: 0.5, alpha: 1))
+        context.fill(imageRect)
+        context.restoreGState()
         context.saveGState()
         context.clip(to: imageRect)
         context.setFillColor(CGColor(gray: 0.88, alpha: 1))
@@ -117,7 +136,7 @@ final class ImageCanvasView: NSView {
         if let bounds = model.selectionBounds, textEditor == nil {
             let points = corners(of: bounds).map { canvasPoint($0, document: document) }
             context.saveGState()
-            context.setStrokeColor(NSColor.controlAccentColor.cgColor)
+            context.setStrokeColor(NSColor.glint.cgColor)
             context.setLineWidth(1.5 / zoom)
             context.beginPath()
             context.move(to: points[0])
@@ -143,7 +162,7 @@ final class ImageCanvasView: NSView {
                     context.addRect(selection)
                     context.fillPath(using: .evenOdd)
                 }
-                context.setStrokeColor(NSColor.controlAccentColor.cgColor)
+                context.setStrokeColor(NSColor.glint.cgColor)
                 context.setLineWidth(1.5 / zoom)
                 context.setLineDash(phase: 0, lengths: [6 / zoom, 4 / zoom])
                 context.stroke(selection)
@@ -426,6 +445,7 @@ final class ImageCanvasView: NSView {
         default:
             if key == " " { spacePressed = true; NSCursor.openHand.set() }
             else if let tool = AnnotationTool.allCases.first(where: { $0.keyboardKey == key }) {
+                if tool == .crop { model.select(nil) }
                 model.tool = tool
                 window?.invalidateCursorRects(for: self)
             } else { super.keyDown(with: event) }
@@ -497,12 +517,24 @@ struct ImageCanvas: NSViewRepresentable {
         scroll.minMagnification = 0.02
         scroll.maxMagnification = 8
         scroll.drawsBackground = true
-        scroll.backgroundColor = .windowBackgroundColor
+        scroll.backgroundColor = .backdrop
+        scroll.contentView = CenteringClipView()
         scroll.documentView = ImageCanvasView(model: model)
         return scroll
     }
 
     func updateNSView(_ scroll: NSScrollView, context: Context) {
         (scroll.documentView as? ImageCanvasView)?.needsDisplay = true
+    }
+}
+
+// keeps a document smaller than the viewport centered
+final class CenteringClipView: NSClipView {
+    override func constrainBoundsRect(_ proposedBounds: NSRect) -> NSRect {
+        var rect = super.constrainBoundsRect(proposedBounds)
+        guard let document = documentView?.frame else { return rect }
+        if rect.width > document.width { rect.origin.x = (document.width - rect.width) / 2 }
+        if rect.height > document.height { rect.origin.y = (document.height - rect.height) / 2 }
+        return rect
     }
 }
