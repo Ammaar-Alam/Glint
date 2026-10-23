@@ -1,37 +1,36 @@
-# Contributing to Clipt
+# Contributing
 
-Clipt is a native macOS application built with Swift, AppKit, SwiftUI, ScreenCaptureKit, and AVFoundation. It has no third-party runtime dependencies.
+Glint is Swift, AppKit and SwiftUI with no third-party dependencies.
 
-## Development
+## Setup
 
-Use macOS 15 or later with Xcode and Swift 6. The minimum-platform CI job uses Xcode 16.4; local development is also tested with Xcode 27.
+macOS 15 and Xcode 16.4 or later.
 
 ```sh
 swift test
 scripts/build-app.sh debug
-open build/Clipt.app
+open build/Glint.app
 ```
 
-Tests use generated media and do not need access to your screen, microphone, or camera. Live capture tests require the corresponding macOS permissions. Automatic scrolling and optional key recording also require Accessibility access.
+Set `GLINT_SIGNING_IDENTITY` to a certificate's SHA-1 hash to keep permissions between builds. Otherwise the app is ad-hoc signed.
 
-## Changes
+Tests use generated media and need no permissions. Check capture, recording and window behavior in the running app too.
 
-- Keep changes focused and reuse the module that owns the behavior.
-- Include a regression test for a bug when the failure can be reproduced deterministically.
-- Keep image processing, media encoding, and file I/O off the interaction path.
-- Preserve original media and existing output files when work fails or is canceled.
-- Treat project files as untrusted input. Keep path, size, and format validation intact.
-- Preserve existing project formats or provide a tested migration when changing persisted data.
-- Check relevant native interactions as well as unit tests. Passing media tests alone does not prove window focus, permissions, or hardware behavior.
+## Guidelines
 
-Use conventional commit titles such as `fix(recording): preserve audio across pauses` or `feat(editor): add a crop preset`. Describe the resulting behavior and the checks performed in the pull request.
+- Keep changes focused, and put them in the file that owns the behavior.
+- Add a regression test when a bug can be reproduced deterministically.
+- Keep image, video and file work off the main thread.
+- Never lose original media or overwrite good output when work fails or is canceled.
+- Treat project files as untrusted input.
+- Migrate persisted formats with a test when changing them.
+
+Use conventional commit titles, for example `fix(recording): keep audio across pauses`.
 
 ## Bug reports
 
-Include the Clipt version, macOS version, reproducible steps, expected behavior, and actual behavior. For capture bugs, mention display scaling and whether multiple displays are connected. Use generated or sanitized media; do not attach private screenshots, recordings, credentials, or personal key-event data.
+Include the Glint and macOS versions, steps to reproduce, and expected and actual behavior. Don't attach private screenshots or recordings.
 
-## Distribution
+## License
 
-Before distributing an app build, publish the matching source revision and include the GPLv3 license. Developer ID signing and notarization are separate from the local ad-hoc build script. Check the final bundle on a clean Mac after signing.
-
-Contributions are provided under the repository’s GPL-3.0-only license. Be respectful, and explain feedback with concrete behavior or evidence.
+Contributions are licensed under [GPLv3](LICENSE).

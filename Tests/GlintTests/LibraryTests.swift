@@ -1,12 +1,12 @@
 import XCTest
 import CoreGraphics
-@testable import Clipt
+@testable import Glint
 
 final class LibraryTests: XCTestCase {
     func testVideoProjectImportPublishesAfterComposedThumbnail() async throws {
         let root = try VideoTests.directory()
         defer { try? FileManager.default.removeItem(at: root) }
-        let source = root.appendingPathComponent("source.cliptvideo", isDirectory: false)
+        let source = root.appendingPathComponent("source.glintvideo", isDirectory: false)
         try FileManager.default.createDirectory(at: source, withIntermediateDirectories: false)
         try await VideoTests.movie(at: source.appendingPathComponent("screen.mov"))
         var project = VideoProject(duration: 1, width: 96, height: 64, frameRate: 10)
@@ -24,7 +24,7 @@ final class LibraryTests: XCTestCase {
     }
 
     func testCapturePersistsBeforeBecomingVisibleAndBadInputDoesNotCreateItem() async throws {
-        let root = FileManager.default.temporaryDirectory.appendingPathComponent("Clipt-library-test-\(UUID().uuidString)")
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("Glint-library-test-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: root) }
         let captures = root.appendingPathComponent("captures")
@@ -66,7 +66,7 @@ final class LibraryTests: XCTestCase {
     }
 
     func testExportReplacesFileAtomicallyAndFailureKeepsExistingDestination() throws {
-        let root = FileManager.default.temporaryDirectory.appendingPathComponent("Clipt-export-test-\(UUID().uuidString)")
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("Glint-export-test-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: root) }
         let source = root.appendingPathComponent("source.png")
@@ -92,7 +92,7 @@ final class LibraryTests: XCTestCase {
 
     func testTemporaryCleanupOnlyRemovesOwnedFiles() throws {
         let owned = ImageFile.temporaryURL()
-        let outside = FileManager.default.temporaryDirectory.appendingPathComponent("Clipt-cleanup-test-\(UUID().uuidString)")
+        let outside = FileManager.default.temporaryDirectory.appendingPathComponent("Glint-cleanup-test-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: outside, withIntermediateDirectories: true)
         let imported = outside.appendingPathComponent(owned.lastPathComponent)
         try Data("owned".utf8).write(to: owned)
@@ -106,10 +106,10 @@ final class LibraryTests: XCTestCase {
 
     @MainActor
     func testProjectsShareFullResolutionFlattenedImagesAndRefreshWithoutDuplicating() async throws {
-        let root = FileManager.default.temporaryDirectory.appendingPathComponent("Clipt-share-test-\(UUID().uuidString)")
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("Glint-share-test-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: root) }
-        let projectURL = root.appendingPathComponent("private.clipt")
+        let projectURL = root.appendingPathComponent("private.glint")
         let context = try XCTUnwrap(CGContext(data: nil, width: 3200, height: 80, bitsPerComponent: 8, bytesPerRow: 0, space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue))
         context.setFillColor(CGColor(red: 1, green: 1, blue: 1, alpha: 1))
         context.fill(CGRect(x: 0, y: 0, width: 3200, height: 80))

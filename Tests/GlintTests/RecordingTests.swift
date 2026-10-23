@@ -2,7 +2,7 @@ import XCTest
 @preconcurrency import AVFoundation
 @preconcurrency import CoreMedia
 import ScreenCaptureKit
-@testable import Clipt
+@testable import Glint
 
 final class RecordingTests: XCTestCase {
     func testPlanarScreenAudioCrossingFirstFrameDoesNotStopRecording() async throws {
@@ -79,17 +79,17 @@ final class RecordingTests: XCTestCase {
     func testRecoveryKeepsUnimportedProjectsAndRejectsMalformedImportMarker() async throws {
         let root = try VideoTests.directory()
         defer { try? FileManager.default.removeItem(at: root) }
-        let completed = root.appendingPathComponent("completed.cliptvideo", isDirectory: true)
+        let completed = root.appendingPathComponent("completed.glintvideo", isDirectory: true)
         try FileManager.default.createDirectory(at: completed, withIntermediateDirectories: true)
         try await VideoTests.movie(at: completed.appendingPathComponent("screen.mov"))
         try VideoProject(duration: 1, width: 96, height: 64, frameRate: 10).save(to: completed)
-        let interrupted = root.appendingPathComponent("interrupted.cliptvideo", isDirectory: true)
+        let interrupted = root.appendingPathComponent("interrupted.glintvideo", isDirectory: true)
         try FileManager.default.copyItem(at: completed, to: interrupted)
         try Data().write(to: interrupted.appendingPathComponent("recording-in-progress"))
-        let imported = root.appendingPathComponent("imported.cliptvideo", isDirectory: true)
+        let imported = root.appendingPathComponent("imported.glintvideo", isDirectory: true)
         try FileManager.default.copyItem(at: completed, to: imported)
         try Data(UUID().uuidString.utf8).write(to: imported.appendingPathComponent("imported-to-library"))
-        let malformed = root.appendingPathComponent("malformed.cliptvideo", isDirectory: true)
+        let malformed = root.appendingPathComponent("malformed.glintvideo", isDirectory: true)
         try FileManager.default.copyItem(at: completed, to: malformed)
         try Data("invalid marker".utf8).write(to: malformed.appendingPathComponent("imported-to-library"))
         let recovered = try await RecordingController.recoverInterruptedRecordings(in: root)
@@ -129,7 +129,7 @@ final class RecordingTests: XCTestCase {
     }
 
     func testWriterEncodesSeparateAudioTracksAndHoldsFinalFrame() async throws {
-        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("Clipt-recording-test-\(UUID().uuidString)", isDirectory: true)
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("Glint-recording-test-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: directory) }
         var options = RecordingOptions(); options.capturesMicrophone = true
@@ -180,7 +180,7 @@ final class RecordingTests: XCTestCase {
         var buffer: CVPixelBuffer?
         let status = CVPixelBufferCreate(kCFAllocatorDefault, 64, 64, kCVPixelFormatType_32BGRA,
             [kCVPixelBufferCGImageCompatibilityKey: true, kCVPixelBufferCGBitmapContextCompatibilityKey: true] as CFDictionary, &buffer)
-        guard status == kCVReturnSuccess, let buffer else { throw CliptError.message("Couldn’t create the video test fixture.") }
+        guard status == kCVReturnSuccess, let buffer else { throw GlintError.message("Couldn’t create the video test fixture.") }
         CVPixelBufferLockBaseAddress(buffer, [])
         if let pointer = CVPixelBufferGetBaseAddress(buffer) { memset(pointer, 128, CVPixelBufferGetDataSize(buffer)) }
         CVPixelBufferUnlockBaseAddress(buffer, [])
@@ -189,7 +189,7 @@ final class RecordingTests: XCTestCase {
         var timing = CMSampleTimingInfo(duration: CMTime(value: 1, timescale: 30), presentationTimeStamp: CMTime(seconds: time, preferredTimescale: 600), decodeTimeStamp: .invalid)
         var sample: CMSampleBuffer?
         guard let format, CMSampleBufferCreateReadyWithImageBuffer(allocator: kCFAllocatorDefault, imageBuffer: buffer, formatDescription: format, sampleTiming: &timing, sampleBufferOut: &sample) == noErr,
-              let sample else { throw CliptError.message("Couldn’t create the video test sample.") }
+              let sample else { throw GlintError.message("Couldn’t create the video test sample.") }
         return sample
     }
 
@@ -216,17 +216,17 @@ final class RecordingTests: XCTestCase {
         var description: CMAudioFormatDescription?
         guard CMAudioFormatDescriptionCreate(allocator: kCFAllocatorDefault, asbd: format.streamDescription, layoutSize: 0, layout: nil,
             magicCookieSize: 0, magicCookie: nil, extensions: nil, formatDescriptionOut: &description) == noErr,
-              let description else { throw CliptError.message("Couldn’t create the planar audio test format.") }
+              let description else { throw GlintError.message("Couldn’t create the planar audio test format.") }
         var timing = CMSampleTimingInfo(duration: CMTime(value: 1, timescale: CMTimeScale(sampleRate)),
             presentationTimeStamp: CMTime(seconds: time, preferredTimescale: 1_000_000_000), decodeTimeStamp: .invalid)
         var sample: CMSampleBuffer?
         guard CMSampleBufferCreate(allocator: kCFAllocatorDefault, dataBuffer: nil, dataReady: false, makeDataReadyCallback: nil,
             refcon: nil, formatDescription: description, sampleCount: Int(pcm.frameLength), sampleTimingEntryCount: 1,
             sampleTimingArray: &timing, sampleSizeEntryCount: 0, sampleSizeArray: nil, sampleBufferOut: &sample) == noErr,
-              let sample else { throw CliptError.message("Couldn’t create the planar audio test sample.") }
+              let sample else { throw GlintError.message("Couldn’t create the planar audio test sample.") }
         guard CMSampleBufferSetDataBufferFromAudioBufferList(sample, blockBufferAllocator: kCFAllocatorDefault,
             blockBufferMemoryAllocator: kCFAllocatorDefault, flags: 0, bufferList: pcm.audioBufferList) == noErr,
-              CMSampleBufferSetDataReady(sample) == noErr else { throw CliptError.message("Couldn’t attach the planar audio test buffers.") }
+              CMSampleBufferSetDataReady(sample) == noErr else { throw GlintError.message("Couldn’t attach the planar audio test buffers.") }
         return sample
     }
 
@@ -238,10 +238,10 @@ final class RecordingTests: XCTestCase {
             mFramesPerPacket: 1, mBytesPerFrame: channels * 4, mChannelsPerFrame: channels, mBitsPerChannel: 32, mReserved: 0)
         var format: CMAudioFormatDescription?
         guard CMAudioFormatDescriptionCreate(allocator: kCFAllocatorDefault, asbd: &description, layoutSize: 0, layout: nil, magicCookieSize: 0, magicCookie: nil, extensions: nil, formatDescriptionOut: &format) == noErr,
-              let format else { throw CliptError.message("Couldn’t create the audio test format.") }
+              let format else { throw GlintError.message("Couldn’t create the audio test format.") }
         var block: CMBlockBuffer?
         guard CMBlockBufferCreateWithMemoryBlock(allocator: kCFAllocatorDefault, memoryBlock: nil, blockLength: bytes, blockAllocator: kCFAllocatorDefault, customBlockSource: nil, offsetToData: 0, dataLength: bytes, flags: 0, blockBufferOut: &block) == noErr,
-              let block else { throw CliptError.message("Couldn’t create the audio test buffer.") }
+              let block else { throw GlintError.message("Couldn’t create the audio test buffer.") }
         CMBlockBufferFillDataBytes(with: 0, blockBuffer: block, offsetIntoDestination: 0, dataLength: bytes)
         if amplitude > 0 {
             let samples = (0..<(frameCount * Int(channels))).map { index in
@@ -255,7 +255,7 @@ final class RecordingTests: XCTestCase {
         var sample: CMSampleBuffer?
         guard CMSampleBufferCreateReady(allocator: kCFAllocatorDefault, dataBuffer: block, formatDescription: format, sampleCount: frameCount,
             sampleTimingEntryCount: 1, sampleTimingArray: &timing, sampleSizeEntryCount: 0, sampleSizeArray: nil, sampleBufferOut: &sample) == noErr,
-              let sample else { throw CliptError.message("Couldn’t create the audio test sample.") }
+              let sample else { throw GlintError.message("Couldn’t create the audio test sample.") }
         return sample
     }
 }

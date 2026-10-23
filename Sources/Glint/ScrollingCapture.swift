@@ -51,12 +51,12 @@ struct ScrollRaster {
         let height = axis == .vertical ? image.height : min(96, image.height)
         guard let context = CGContext(data: nil, width: width, height: height, bitsPerComponent: 8, bytesPerRow: width,
                                       space: CGColorSpaceCreateDeviceGray(), bitmapInfo: CGImageAlphaInfo.none.rawValue) else {
-            throw CliptError.message("The scrolling capture couldn’t be analyzed.")
+            throw GlintError.message("The scrolling capture couldn’t be analyzed.")
         }
         context.interpolationQuality = .medium
         context.draw(image, in: CGRect(x: 0, y: 0, width: width, height: height))
         guard let data = context.data?.assumingMemoryBound(to: UInt8.self) else {
-            throw CliptError.message("The scrolling capture couldn’t be read.")
+            throw GlintError.message("The scrolling capture couldn’t be read.")
         }
         length = axis == .vertical ? height : width
         breadth = axis == .vertical ? width : height
@@ -139,14 +139,14 @@ struct ScrollStitcher {
 
     mutating func append(_ image: CGImage) throws -> ScrollMatch {
         guard image.width == first.width, image.height == first.height else {
-            throw CliptError.message("The screen resolution changed. Finish this capture and start another.")
+            throw GlintError.message("The screen resolution changed. Finish this capture and start another.")
         }
         let raster = try ScrollRaster(image: image, axis: axis)
         let match = previous.match(raster)
         guard case .forward(let distance) = match else { return match }
         let breadth = axis == .vertical ? first.width : first.height
         guard length + distance <= 32_768, (length + distance) * breadth <= maximumPixels else {
-            throw CliptError.message("This capture reached its size limit. Finish to save it, then start another.")
+            throw GlintError.message("This capture reached its size limit. Finish to save it, then start another.")
         }
         let rect = axis == .vertical
             ? CGRect(x: 0, y: image.height - edgeInset - distance, width: image.width, height: distance)
@@ -168,12 +168,12 @@ struct ScrollStitcher {
         let width = axis == .vertical ? first.width : length
         let height = axis == .vertical ? length : first.height
         guard let context = Self.context(width: width, height: height) else {
-            throw CliptError.message("There isn’t enough memory to finish this scrolling capture.")
+            throw GlintError.message("There isn’t enough memory to finish this scrolling capture.")
         }
         let leadingRect = axis == .vertical
             ? CGRect(x: 0, y: 0, width: first.width, height: first.height - edgeInset)
             : CGRect(x: 0, y: 0, width: first.width - edgeInset, height: first.height)
-        guard let leading = first.cropping(to: leadingRect) else { throw CliptError.message("The first frame couldn’t be read.") }
+        guard let leading = first.cropping(to: leadingRect) else { throw GlintError.message("The first frame couldn’t be read.") }
         var offset = 0
         // Only the newest trailing edge is kept so fixed footers are not repeated
         for image in [leading] + strips + [tail] {
@@ -183,17 +183,17 @@ struct ScrollStitcher {
             context.draw(image, in: rect)
             offset += axis == .vertical ? image.height : image.width
         }
-        guard let image = context.makeImage() else { throw CliptError.message("The capture couldn’t be rendered.") }
+        guard let image = context.makeImage() else { throw GlintError.message("The capture couldn’t be rendered.") }
         return image
     }
 
     private static func copy(_ image: CGImage, rect: CGRect) throws -> CGImage {
         guard let cropped = image.cropping(to: rect), let context = context(width: cropped.width, height: cropped.height) else {
-            throw CliptError.message("The next part of the capture couldn’t be added.")
+            throw GlintError.message("The next part of the capture couldn’t be added.")
         }
         // A copied strip does not retain the full viewport's backing storage
         context.draw(cropped, in: CGRect(x: 0, y: 0, width: cropped.width, height: cropped.height))
-        guard let result = context.makeImage() else { throw CliptError.message("The capture couldn’t be combined.") }
+        guard let result = context.makeImage() else { throw GlintError.message("The capture couldn’t be combined.") }
         return result
     }
 

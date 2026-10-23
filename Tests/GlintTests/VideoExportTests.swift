@@ -3,7 +3,7 @@ import XCTest
 @preconcurrency import CoreMedia
 import ScreenCaptureKit
 import ImageIO
-@testable import Clipt
+@testable import Glint
 
 final class VideoExportTests: XCTestCase {
     func testGIFCentisecondDelaysPreserveDurationAt15FPS() async throws {
@@ -39,7 +39,7 @@ final class VideoExportTests: XCTestCase {
             do {
                 try await VideoExporter.export(project: project, directory: directory, destination: output, format: .gif, gifFrameRate: rate) { _ in }
                 XCTFail("An invalid GIF frame rate must be rejected")
-            } catch is CliptError {}
+            } catch is GlintError {}
         }
         let task = Task { try await VideoExporter.export(project: project, directory: directory, destination: output, format: .gif) { _ in } }
         task.cancel()
@@ -67,7 +67,7 @@ final class VideoExportTests: XCTestCase {
         do {
             try await VideoExporter.export(project: project, directory: directory, destination: original, format: .original) { _ in }
             XCTFail("An export must preserve its editable source")
-        } catch is CliptError {}
+        } catch is GlintError {}
         XCTAssertEqual(try Data(contentsOf: original), bytes)
     }
 
@@ -171,7 +171,7 @@ final class VideoExportTests: XCTestCase {
         let output = AVAssetReaderTrackOutput(track: track, outputSettings: [AVFormatIDKey: kAudioFormatLinearPCM,
             AVLinearPCMBitDepthKey: 32, AVLinearPCMIsFloatKey: true, AVLinearPCMIsNonInterleaved: false])
         reader.add(output)
-        guard reader.startReading() else { throw reader.error ?? CliptError.message("The audio test couldn’t start reading.") }
+        guard reader.startReading() else { throw reader.error ?? GlintError.message("The audio test couldn’t start reading.") }
         var peak: Float = 0
         while let sample = output.copyNextSampleBuffer(), let block = sample.dataBuffer {
             let bytes = CMBlockBufferGetDataLength(block)
@@ -181,7 +181,7 @@ final class VideoExportTests: XCTestCase {
             }
             peak = max(peak, samples.map(abs).max() ?? 0)
         }
-        guard reader.status == .completed else { throw reader.error ?? CliptError.message("The audio test didn’t finish reading.") }
+        guard reader.status == .completed else { throw reader.error ?? GlintError.message("The audio test didn’t finish reading.") }
         return peak
     }
 
@@ -192,17 +192,17 @@ final class VideoExportTests: XCTestCase {
         let adaptor = AVAssetWriterInputPixelBufferAdaptor(assetWriterInput: input, sourcePixelBufferAttributes:
             [kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA, kCVPixelBufferWidthKey as String: 640, kCVPixelBufferHeightKey as String: 360])
         writer.add(input)
-        guard writer.startWriting() else { throw writer.error ?? CliptError.message("The video test fixture couldn’t start.") }
+        guard writer.startWriting() else { throw writer.error ?? GlintError.message("The video test fixture couldn’t start.") }
         writer.startSession(atSourceTime: .zero)
         var seed: UInt32 = 42
         for frame in 0..<30 {
             while !input.isReadyForMoreMediaData {
-                guard writer.status == .writing else { throw writer.error ?? CliptError.message("The video test fixture stopped encoding.") }
+                guard writer.status == .writing else { throw writer.error ?? GlintError.message("The video test fixture stopped encoding.") }
                 try await Task.sleep(for: .milliseconds(2))
             }
             var buffer: CVPixelBuffer?
             guard let pool = adaptor.pixelBufferPool, CVPixelBufferPoolCreatePixelBuffer(nil, pool, &buffer) == kCVReturnSuccess,
-                  let buffer else { throw CliptError.message("The video test fixture couldn’t allocate a frame.") }
+                  let buffer else { throw GlintError.message("The video test fixture couldn’t allocate a frame.") }
             CVPixelBufferLockBaseAddress(buffer, [])
             if let base = CVPixelBufferGetBaseAddress(buffer) {
                 let stride = CVPixelBufferGetBytesPerRow(buffer)
@@ -215,10 +215,10 @@ final class VideoExportTests: XCTestCase {
                 }
             }
             CVPixelBufferUnlockBaseAddress(buffer, [])
-            guard adaptor.append(buffer, withPresentationTime: CMTime(value: Int64(frame), timescale: 15)) else { throw writer.error ?? CliptError.message("The video test fixture couldn’t write a frame.") }
+            guard adaptor.append(buffer, withPresentationTime: CMTime(value: Int64(frame), timescale: 15)) else { throw writer.error ?? GlintError.message("The video test fixture couldn’t write a frame.") }
         }
         writer.endSession(atSourceTime: CMTime(seconds: 2, preferredTimescale: 600)); input.markAsFinished()
         await writer.finishWriting()
-        guard writer.status == .completed else { throw writer.error ?? CliptError.message("The video test fixture couldn’t finish.") }
+        guard writer.status == .completed else { throw writer.error ?? GlintError.message("The video test fixture couldn’t finish.") }
     }
 }

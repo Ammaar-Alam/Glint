@@ -147,7 +147,7 @@ final class VideoInstruction: NSObject, AVVideoCompositionInstructionProtocol, @
 final class VideoCompositor: NSObject, AVVideoCompositing, @unchecked Sendable {
     var sourcePixelBufferAttributes: [String: any Sendable]? { [kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA] }
     var requiredPixelBufferAttributesForRenderContext: [String: any Sendable] { [kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA, kCVPixelBufferMetalCompatibilityKey as String: true] }
-    private let queue = DispatchQueue(label: "app.clipt.video-compositor", qos: .userInitiated)
+    private let queue = DispatchQueue(label: "app.glint.video-compositor", qos: .userInitiated)
     private let renderer = VideoFrameRenderer()
     private let cancellationLock = NSLock()
     private var generation = 0
@@ -165,7 +165,7 @@ final class VideoCompositor: NSObject, AVVideoCompositing, @unchecked Sendable {
                 guard let instruction = request.videoCompositionInstruction as? VideoInstruction,
                       let screenBuffer = request.sourceFrame(byTrackID: instruction.screenTrackID),
                       let output = request.renderContext.newPixelBuffer() else {
-                    request.finish(with: CliptError.message("A video frame couldn’t be read."))
+                    request.finish(with: GlintError.message("A video frame couldn’t be read."))
                     return
                 }
                 let screen = CIImage(cvPixelBuffer: screenBuffer).transformed(by: instruction.screenTransform)
@@ -400,12 +400,12 @@ enum VideoCompositionBuilder {
     static func make(project: VideoProject, directory: URL, includeEffects: Bool = true, backgroundDirectory: URL? = nil) async throws -> VideoCompositionResult {
         _ = try project.validated()
         let screen = AVURLAsset(url: directory.appendingPathComponent(project.screenFile))
-        guard let sourceVideo = try await screen.loadTracks(withMediaType: .video).first else { throw CliptError.message("The recording has no video track.") }
+        guard let sourceVideo = try await screen.loadTracks(withMediaType: .video).first else { throw GlintError.message("The recording has no video track.") }
         let sourceTransform = try await sourceVideo.load(.preferredTransform)
         let sourceDuration = try await screen.load(.duration).seconds
-        guard project.edits.trimEnd <= sourceDuration + 0.1 else { throw CliptError.message("The video is shorter than the saved edit.") }
+        guard project.edits.trimEnd <= sourceDuration + 0.1 else { throw GlintError.message("The video is shorter than the saved edit.") }
         let asset = AVMutableComposition()
-        guard let video = asset.addMutableTrack(withMediaType: .video, preferredTrackID: kCMPersistentTrackID_Invalid) else { throw CliptError.message("The video timeline couldn’t be created.") }
+        guard let video = asset.addMutableTrack(withMediaType: .video, preferredTrackID: kCMPersistentTrackID_Invalid) else { throw GlintError.message("The video timeline couldn’t be created.") }
         if !includeEffects { video.preferredTransform = sourceTransform }
         let segments = project.segments
         var outputTime = CMTime.zero
@@ -460,7 +460,7 @@ enum VideoCompositionBuilder {
                   let image = CGImageSourceCreateThumbnailAtIndex(source, 0, [kCGImageSourceCreateThumbnailFromImageAlways: true,
                                                                              kCGImageSourceThumbnailMaxPixelSize: project.edits.maximumDimension,
                                                                              kCGImageSourceCreateThumbnailWithTransform: true] as CFDictionary) else {
-                throw CliptError.message("The background image couldn’t be read.")
+                throw GlintError.message("The background image couldn’t be read.")
             }
             return CIImage(cgImage: image)
         }
@@ -470,7 +470,7 @@ enum VideoCompositionBuilder {
 
     static func importMovie(_ url: URL) async throws -> (VideoProject, URL) {
         let asset = AVURLAsset(url: url)
-        guard let track = try await asset.loadTracks(withMediaType: .video).first else { throw CliptError.message("This file doesn’t contain a video.") }
+        guard let track = try await asset.loadTracks(withMediaType: .video).first else { throw GlintError.message("This file doesn’t contain a video.") }
         let size = try await track.load(.naturalSize)
         let transform = try await track.load(.preferredTransform)
         let transformed = CGRect(origin: .zero, size: size).applying(transform)
@@ -479,7 +479,7 @@ enum VideoCompositionBuilder {
         guard transformed.width.isFinite, transformed.height.isFinite,
               abs(transformed.width) >= 1, abs(transformed.height) >= 1,
               abs(transformed.width) <= 32768, abs(transformed.height) <= 32768 else {
-            throw CliptError.message("This video has unsupported frame dimensions.")
+            throw GlintError.message("This video has unsupported frame dimensions.")
         }
         let frameRate = fps.isFinite && fps > 0 ? Int(min(60, max(1, fps.rounded()))) : 30
         var project = VideoProject(duration: duration, width: Int(abs(transformed.width)), height: Int(abs(transformed.height)), frameRate: frameRate)
@@ -489,7 +489,7 @@ enum VideoCompositionBuilder {
         project.edits.showsKeystrokes = false
         project.edits.showsBackground = false
         _ = try project.validated()
-        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("Clipt-\(UUID().uuidString).cliptvideo", isDirectory: true)
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("Glint-\(UUID().uuidString).glintvideo", isDirectory: true)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: false)
         do {
             try FileManager.default.copyItem(at: url, to: directory.appendingPathComponent(project.screenFile))

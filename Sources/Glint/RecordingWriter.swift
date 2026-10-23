@@ -59,7 +59,7 @@ struct RecordingWriterResult {
 
 // media state is confined to queue and callbacks are installed before capture starts
 final class RecordingWriter: NSObject, SCStreamOutput, SCStreamDelegate, AVCaptureVideoDataOutputSampleBufferDelegate, @unchecked Sendable {
-    let queue = DispatchQueue(label: "Clipt.recording.writer", qos: .userInitiated)
+    let queue = DispatchQueue(label: "Glint.recording.writer", qos: .userInitiated)
     var onFailure: ((Error) -> Void)?
     var onWindowFrame: ((CGRect) -> Void)?
     var onCameraStartTime: ((Double) -> Void)?
@@ -95,7 +95,7 @@ final class RecordingWriter: NSObject, SCStreamOutput, SCStreamDelegate, AVCaptu
         videoInput = AVAssetWriterInput(mediaType: .video, outputSettings: Self.videoSettings(width: width, height: height, fps: options.framesPerSecond))
         videoInput.expectsMediaDataInRealTime = true
         super.init()
-        guard writer.canAdd(videoInput) else { throw CliptError.message("The screen recording encoder isn’t available.") }
+        guard writer.canAdd(videoInput) else { throw GlintError.message("The screen recording encoder isn’t available.") }
         writer.add(videoInput)
         if options.capturesSystemAudio { audioInput = try makeAudioInput(title: "System Audio", channels: 2) }
         if options.capturesMicrophone { microphoneInput = try makeAudioInput(title: "Microphone", channels: 1) }
@@ -117,7 +117,7 @@ final class RecordingWriter: NSObject, SCStreamOutput, SCStreamDelegate, AVCaptu
         metadata.identifier = .quickTimeUserDataTrackName
         metadata.value = title as NSString
         input.metadata = [metadata]
-        guard writer.canAdd(input) else { throw CliptError.message("The audio recording encoder isn’t available.") }
+        guard writer.canAdd(input) else { throw GlintError.message("The audio recording encoder isn’t available.") }
         writer.add(input)
         return input
     }
@@ -135,7 +135,7 @@ final class RecordingWriter: NSObject, SCStreamOutput, SCStreamDelegate, AVCaptu
                     self.startWaiters.append(continuation)
                     self.queue.asyncAfter(deadline: .now() + 8) {
                         guard self.lastVideoSample == nil, !self.startWaiters.isEmpty else { return }
-                        self.fail(CliptError.message("No screen frames arrived. Check Screen Recording permission and try again."))
+                        self.fail(GlintError.message("No screen frames arrived. Check Screen Recording permission and try again."))
                     }
                 }
             }
@@ -174,7 +174,7 @@ final class RecordingWriter: NSObject, SCStreamOutput, SCStreamDelegate, AVCaptu
                raw != SCFrameStatus.complete.rawValue && raw != SCFrameStatus.started.rawValue { return }
             guard sampleBuffer.imageBuffer != nil else { return }
             if timeline.origin == nil {
-                guard writer.startWriting() else { fail(writer.error ?? CliptError.message("The recording couldn’t be started.")); return }
+                guard writer.startWriting() else { fail(writer.error ?? GlintError.message("The recording couldn’t be started.")); return }
                 writer.startSession(atSourceTime: .zero)
                 timeline.origin = hostTime
             }
@@ -202,7 +202,7 @@ final class RecordingWriter: NSObject, SCStreamOutput, SCStreamDelegate, AVCaptu
         guard let format = sample.formatDescription,
               let description = CMAudioFormatDescriptionGetStreamBasicDescription(format)?.pointee,
               description.mFormatID == kAudioFormatLinearPCM, description.mSampleRate.isFinite,
-              description.mSampleRate > 0 else { fail(CliptError.message("The recording received an unsupported audio format.")); return }
+              description.mSampleRate > 0 else { fail(GlintError.message("The recording received an unsupported audio format.")); return }
         let rate = description.mSampleRate
         let count = sample.numSamples
         let start = sample.presentationTimeStamp.seconds
@@ -233,25 +233,25 @@ final class RecordingWriter: NSObject, SCStreamOutput, SCStreamDelegate, AVCaptu
               asbd.pointee.mFormatID == kAudioFormatLinearPCM,
               let format = AVAudioFormat(streamDescription: asbd),
               let pcm = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: AVAudioFrameCount(frames.count)) else {
-            throw CliptError.message("The recording received an invalid audio frame range or format.")
+            throw GlintError.message("The recording received an invalid audio frame range or format.")
         }
         pcm.frameLength = pcm.frameCapacity
         // PCM may be planar and omit the sample sizes required by generic range copying
         var status = CMSampleBufferCopyPCMDataIntoAudioBufferList(sample, at: Int32(frames.lowerBound), frameCount: Int32(frames.count), into: pcm.mutableAudioBufferList)
-        guard status == noErr else { throw CliptError.message("The audio samples couldn’t be copied (CoreMedia \(status)).") }
+        guard status == noErr else { throw GlintError.message("The audio samples couldn’t be copied (CoreMedia \(status)).") }
         var timing = CMSampleTimingInfo()
         status = CMSampleBufferGetSampleTimingInfo(sample, at: frames.lowerBound, timingInfoOut: &timing)
-        guard status == noErr else { throw CliptError.message("The audio timestamp couldn’t be read (CoreMedia \(status)).") }
+        guard status == noErr else { throw GlintError.message("The audio timestamp couldn’t be read (CoreMedia \(status)).") }
         var trimmed: CMSampleBuffer?
         status = CMSampleBufferCreate(allocator: kCFAllocatorDefault, dataBuffer: nil, dataReady: false, makeDataReadyCallback: nil,
             refcon: nil, formatDescription: description, sampleCount: frames.count, sampleTimingEntryCount: 1, sampleTimingArray: &timing,
             sampleSizeEntryCount: 0, sampleSizeArray: nil, sampleBufferOut: &trimmed)
-        guard status == noErr, let trimmed else { throw CliptError.message("The trimmed audio couldn’t be prepared (CoreMedia \(status)).") }
+        guard status == noErr, let trimmed else { throw GlintError.message("The trimmed audio couldn’t be prepared (CoreMedia \(status)).") }
         status = CMSampleBufferSetDataBufferFromAudioBufferList(trimmed, blockBufferAllocator: kCFAllocatorDefault,
             blockBufferMemoryAllocator: kCFAllocatorDefault, flags: 0, bufferList: pcm.audioBufferList)
-        guard status == noErr else { throw CliptError.message("The trimmed audio couldn’t be stored (CoreMedia \(status)).") }
+        guard status == noErr else { throw GlintError.message("The trimmed audio couldn’t be stored (CoreMedia \(status)).") }
         status = CMSampleBufferSetDataReady(trimmed)
-        guard status == noErr else { throw CliptError.message("The trimmed audio couldn’t be made ready (CoreMedia \(status)).") }
+        guard status == noErr else { throw GlintError.message("The trimmed audio couldn’t be made ready (CoreMedia \(status)).") }
         return trimmed
     }
 
@@ -262,7 +262,7 @@ final class RecordingWriter: NSObject, SCStreamOutput, SCStreamDelegate, AVCaptu
         }
         do {
             let retimed = try Self.retime(sample, to: time)
-            guard input.append(retimed) else { fail(writer.error ?? CliptError.message("The recording couldn’t be written. Check available disk space.")); return }
+            guard input.append(retimed) else { fail(writer.error ?? GlintError.message("The recording couldn’t be written. Check available disk space.")); return }
             if video { lastVideoSample = retimed; lastVideoTime = time }
         } catch { fail(error) }
     }
@@ -278,9 +278,9 @@ final class RecordingWriter: NSObject, SCStreamOutput, SCStreamDelegate, AVCaptu
                 camera.movieFragmentInterval = CMTime(seconds: 2, preferredTimescale: 600)
                 let input = AVAssetWriterInput(mediaType: .video, outputSettings: Self.videoSettings(width: CVPixelBufferGetWidth(image), height: CVPixelBufferGetHeight(image), fps: frameRate))
                 input.expectsMediaDataInRealTime = true
-                guard camera.canAdd(input) else { throw CliptError.message("The camera recording encoder isn’t available.") }
+                guard camera.canAdd(input) else { throw GlintError.message("The camera recording encoder isn’t available.") }
                 camera.add(input)
-                guard camera.startWriting() else { throw camera.error ?? CliptError.message("The camera recording couldn’t start.") }
+                guard camera.startWriting() else { throw camera.error ?? GlintError.message("The camera recording couldn’t start.") }
                 camera.startSession(atSourceTime: .zero)
                 cameraWriter = camera; cameraInput = input; cameraStartTime = time
                 onCameraStartTime?(time)
@@ -288,7 +288,7 @@ final class RecordingWriter: NSObject, SCStreamOutput, SCStreamDelegate, AVCaptu
             guard let input = cameraInput, let cameraWriter, let start = cameraStartTime else { return }
             guard input.isReadyForMoreMediaData else { droppedVideoFrames += 1; return }
             let retimed = try Self.retime(sampleBuffer, to: max(0, time - start))
-            guard input.append(retimed) else { throw cameraWriter.error ?? CliptError.message("The camera recording couldn’t be written.") }
+            guard input.append(retimed) else { throw cameraWriter.error ?? GlintError.message("The camera recording couldn’t be written.") }
             lastCameraSample = retimed; lastCameraTime = time - start
         } catch { fail(error) }
     }
@@ -322,10 +322,10 @@ final class RecordingWriter: NSObject, SCStreamOutput, SCStreamDelegate, AVCaptu
     static func retime(_ sample: CMSampleBuffer, to seconds: Double) throws -> CMSampleBuffer {
         var count = 0
         var status = CMSampleBufferGetSampleTimingInfoArray(sample, entryCount: 0, arrayToFill: nil, entriesNeededOut: &count)
-        guard status == noErr, count > 0 else { throw CliptError.message("The recording received an invalid timestamp.") }
+        guard status == noErr, count > 0 else { throw GlintError.message("The recording received an invalid timestamp.") }
         var timing = Array(repeating: CMSampleTimingInfo(), count: count)
         status = CMSampleBufferGetSampleTimingInfoArray(sample, entryCount: count, arrayToFill: &timing, entriesNeededOut: nil)
-        guard status == noErr else { throw CliptError.message("The recording timestamp couldn’t be read.") }
+        guard status == noErr else { throw GlintError.message("The recording timestamp couldn’t be read.") }
         let delta = CMTimeSubtract(sample.presentationTimeStamp, CMTime(seconds: seconds, preferredTimescale: 1_000_000_000))
         for index in timing.indices {
             timing[index].presentationTimeStamp = CMTimeSubtract(timing[index].presentationTimeStamp, delta)
@@ -333,7 +333,7 @@ final class RecordingWriter: NSObject, SCStreamOutput, SCStreamDelegate, AVCaptu
         }
         var result: CMSampleBuffer?
         status = CMSampleBufferCreateCopyWithNewTiming(allocator: kCFAllocatorDefault, sampleBuffer: sample, sampleTimingEntryCount: count, sampleTimingArray: &timing, sampleBufferOut: &result)
-        guard status == noErr, let result else { throw CliptError.message("The recording timestamp couldn’t be updated.") }
+        guard status == noErr, let result else { throw GlintError.message("The recording timestamp couldn’t be updated.") }
         return result
     }
 
@@ -347,7 +347,7 @@ final class RecordingWriter: NSObject, SCStreamOutput, SCStreamDelegate, AVCaptu
                 }
             }
             if ready { break }
-            if attempt == 249 { throw CliptError.message("The video encoder didn’t finish in time. The recorded media has been kept for recovery.") }
+            if attempt == 249 { throw GlintError.message("The video encoder didn’t finish in time. The recorded media has been kept for recovery.") }
             try await Task.sleep(for: .milliseconds(20))
         }
         return try await withCheckedThrowingContinuation { continuation in
@@ -355,11 +355,11 @@ final class RecordingWriter: NSObject, SCStreamOutput, SCStreamDelegate, AVCaptu
                 self.isFinishing = true
                 guard self.timeline.origin != nil else {
                     self.writer.cancelWriting()
-                    continuation.resume(throwing: self.failure ?? CliptError.message("The recording contains no screen frames."))
+                    continuation.resume(throwing: self.failure ?? GlintError.message("The recording contains no screen frames."))
                     return
                 }
                 guard self.writer.status == .writing else {
-                    continuation.resume(throwing: self.writer.error ?? self.failure ?? CliptError.message("The recording writer stopped unexpectedly."))
+                    continuation.resume(throwing: self.writer.error ?? self.failure ?? GlintError.message("The recording writer stopped unexpectedly."))
                     return
                 }
                 let duration = max(self.timeline.elapsed(at: hostTime), self.lastVideoTime + 1 / Double(self.frameRate))
@@ -367,7 +367,7 @@ final class RecordingWriter: NSObject, SCStreamOutput, SCStreamDelegate, AVCaptu
                     if let last = self.lastVideoSample, duration - 1 / Double(self.frameRate) > self.lastVideoTime {
                         guard self.videoInput.isReadyForMoreMediaData,
                               self.videoInput.append(try Self.retime(last, to: duration - 1 / Double(self.frameRate))) else {
-                            throw self.writer.error ?? CliptError.message("The encoder couldn’t finish the last frame. The recorded media has been kept for recovery.")
+                            throw self.writer.error ?? GlintError.message("The encoder couldn’t finish the last frame. The recorded media has been kept for recovery.")
                         }
                     }
                     self.writer.endSession(atSourceTime: CMTime(seconds: duration, preferredTimescale: 600))
@@ -377,7 +377,7 @@ final class RecordingWriter: NSObject, SCStreamOutput, SCStreamDelegate, AVCaptu
                         let end = max(self.lastCameraTime + 1 / Double(self.frameRate), duration - start)
                         if let last = self.lastCameraSample, end - 1 / Double(self.frameRate) > self.lastCameraTime {
                             guard input.isReadyForMoreMediaData, input.append(try Self.retime(last, to: end - 1 / Double(self.frameRate))) else {
-                                throw camera.error ?? CliptError.message("The encoder couldn’t finish the camera recording. The recorded media has been kept for recovery.")
+                                throw camera.error ?? GlintError.message("The encoder couldn’t finish the camera recording. The recorded media has been kept for recovery.")
                             }
                         }
                         camera.endSession(atSourceTime: CMTime(seconds: end, preferredTimescale: 600)); input.markAsFinished()
@@ -387,7 +387,7 @@ final class RecordingWriter: NSObject, SCStreamOutput, SCStreamDelegate, AVCaptu
                     if let camera = self.cameraWriter, camera.status == .writing { group.enter(); camera.finishWriting { group.leave() } }
                     group.notify(queue: self.queue) {
                         if let error = self.writer.error ?? self.cameraWriter?.error { continuation.resume(throwing: error) }
-                        else if self.writer.status != .completed { continuation.resume(throwing: self.failure ?? CliptError.message("The recording didn’t finish writing.")) }
+                        else if self.writer.status != .completed { continuation.resume(throwing: self.failure ?? GlintError.message("The recording didn’t finish writing.")) }
                         else {
                             continuation.resume(returning: RecordingWriterResult(duration: duration, cameraStartTime: self.cameraStartTime,
                                 droppedVideoFrames: self.droppedVideoFrames, droppedAudioSamples: self.droppedAudioSamples))

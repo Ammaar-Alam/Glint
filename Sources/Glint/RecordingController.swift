@@ -33,12 +33,12 @@ final class RecordingController {
     @ObservationIgnored private var keystrokes: [VideoKeystroke] = []
     @ObservationIgnored private var lastCheckpoint = 0.0
     @ObservationIgnored private var preparationError: Error?
-    private let metadataQueue = DispatchQueue(label: "Clipt.recording.metadata", qos: .utility)
+    private let metadataQueue = DispatchQueue(label: "Glint.recording.metadata", qos: .utility)
 
     func start(options: RecordingOptions) async throws {
-        guard state == .idle else { throw CliptError.message("A recording is already in progress.") }
+        guard state == .idle else { throw GlintError.message("A recording is already in progress.") }
         guard (1...120).contains(options.framesPerSecond), (320...7680).contains(options.maximumDimension),
-              (0...10).contains(options.countdown) else { throw CliptError.message("Choose a supported recording quality and countdown.") }
+              (0...10).contains(options.countdown) else { throw GlintError.message("Choose a supported recording quality and countdown.") }
         state = .preparing
         elapsed = 0; countdownRemaining = 0; microphoneLevel = 0; lastWarning = nil
         self.options = options
@@ -46,12 +46,12 @@ final class RecordingController {
         preparationError = nil
         do {
             guard CGPreflightScreenCaptureAccess() || CGRequestScreenCaptureAccess() else {
-                throw CliptError.message("Allow Clipt in System Settings → Privacy & Security → Screen & System Audio Recording, then try again.")
+                throw GlintError.message("Allow Glint in System Settings → Privacy & Security → Screen & System Audio Recording, then try again.")
             }
             if options.capturesMicrophone { try await Self.requestAccess(to: .audio, name: "Microphone") }
             if options.capturesCamera { try await Self.requestAccess(to: .video, name: "Camera") }
             if options.showsKeystrokes, !AXIsProcessTrusted() {
-                throw CliptError.message("Showing keystrokes requires Accessibility access. Allow Clipt in System Settings → Privacy & Security → Accessibility, or turn off Show Keys.")
+                throw GlintError.message("Showing keystrokes requires Accessibility access. Allow Glint in System Settings → Privacy & Security → Accessibility, or turn off Show Keys.")
             }
             try Task.checkCancellation()
             let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true)
@@ -74,7 +74,7 @@ final class RecordingController {
             config.scalesToFit = true
             if let sourceRect = selection.sourceRect { config.sourceRect = sourceRect }
 
-            let folder = try Self.recordingsDirectory().appendingPathComponent(UUID().uuidString + ".cliptvideo", isDirectory: true)
+            let folder = try Self.recordingsDirectory().appendingPathComponent(UUID().uuidString + ".glintvideo", isDirectory: true)
             try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
             directory = folder
             try Data().write(to: folder.appendingPathComponent("recording-in-progress"))
@@ -123,7 +123,7 @@ final class RecordingController {
             if let session = cameraSession {
                 await Task.detached(priority: .userInitiated) { session.startRunning() }.value
                 output.setCameraClock(session.synchronizationClock)
-                guard session.isRunning else { throw CliptError.message("The camera couldn’t be started. Check that another app isn’t using it.") }
+                guard session.isRunning else { throw GlintError.message("The camera couldn’t be started. Check that another app isn’t using it.") }
             }
             try await capture.startCapture()
             let origin = try await output.waitForFirstFrame()
@@ -146,7 +146,7 @@ final class RecordingController {
     }
 
     func pause() async throws {
-        guard state == .recording, let writer else { throw CliptError.message("There isn’t an active recording to pause.") }
+        guard state == .recording, let writer else { throw GlintError.message("There isn’t an active recording to pause.") }
         let now = Self.hostTime
         timeline.pause(at: now)
         await writer.pause(at: now)
@@ -155,7 +155,7 @@ final class RecordingController {
     }
 
     func resume() async throws {
-        guard state == .paused, let writer else { throw CliptError.message("There isn’t a paused recording to resume.") }
+        guard state == .paused, let writer else { throw GlintError.message("There isn’t a paused recording to resume.") }
         let now = Self.hostTime
         timeline.resume(at: now)
         await writer.resume(at: now)
@@ -164,7 +164,7 @@ final class RecordingController {
 
     func stop() async throws -> URL {
         guard state == .recording || state == .paused, let writer, let directory, var project else {
-            throw CliptError.message("There isn’t a recording to stop.")
+            throw GlintError.message("There isn’t a recording to stop.")
         }
         let end = Self.hostTime
         elapsed = timeline.elapsed(at: end)
@@ -178,7 +178,7 @@ final class RecordingController {
             let result = try await writer.finish(at: end)
             let asset = AVURLAsset(url: directory.appendingPathComponent(project.screenFile))
             let duration = try await asset.load(.duration).seconds
-            guard duration.isFinite, duration > 0 else { throw CliptError.message("The recording is empty.") }
+            guard duration.isFinite, duration > 0 else { throw GlintError.message("The recording is empty.") }
             project.duration = duration; project.edits.trimEnd = duration
             project.cursorSamples = cursorSamples; project.clicks = clicks; project.keystrokes = keystrokes
             if let cameraStart = result.cameraStartTime { project.cameraFile = "camera.mov"; project.cameraStartTime = cameraStart }
@@ -220,14 +220,14 @@ final class RecordingController {
         } catch {
             lastRecordingURL = directory
             resetSession()
-            throw CliptError.message("The recording couldn’t finish: \(error.localizedDescription)\nRecoverable files are kept at \(directory.path).")
+            throw GlintError.message("The recording couldn’t finish: \(error.localizedDescription)\nRecoverable files are kept at \(directory.path).")
         }
     }
 
     private func handleFailure(_ error: Error) async {
         do {
             let url = try await stop()
-            onFailure?(CliptError.message("Recording stopped early: \(error.localizedDescription)\nThe captured portion was saved at \(url.path)."))
+            onFailure?(GlintError.message("Recording stopped early: \(error.localizedDescription)\nThe captured portion was saved at \(url.path)."))
         } catch { onFailure?(error) }
     }
 
@@ -342,7 +342,7 @@ final class RecordingController {
         case .notDetermined: granted = await AVCaptureDevice.requestAccess(for: media)
         default: granted = false
         }
-        guard granted else { throw CliptError.message("Allow Clipt in System Settings → Privacy & Security → \(name), then try again.") }
+        guard granted else { throw GlintError.message("Allow Glint in System Settings → Privacy & Security → \(name), then try again.") }
     }
 
     private func selectContent(_ content: SCShareableContent, mode: RecordingMode) async throws -> (filter: SCContentFilter, rect: CGRect, sourceRect: CGRect?) {
@@ -355,7 +355,7 @@ final class RecordingController {
         case .area:
             guard let rect = await SelectionController.selectRegion() else { throw CancellationError() }
             guard let display = content.displays.first(where: { $0.frame.contains(rect) }) else {
-                throw CliptError.message("Choose a recording area inside one display.")
+                throw GlintError.message("Choose a recording area inside one display.")
             }
             let source = rect.offsetBy(dx: -display.frame.minX, dy: -display.frame.minY)
             return (CaptureFrame.displayFilter(display: display, content: content, hideDesktop: options.hideDesktop), rect, source)
@@ -363,7 +363,7 @@ final class RecordingController {
             let mouse = NSEvent.mouseLocation
             let pointer = CGPoint(x: mouse.x, y: CGDisplayBounds(CGMainDisplayID()).height - mouse.y)
             guard let display = content.displays.first(where: { $0.frame.contains(pointer) }) ?? content.displays.first else {
-                throw CliptError.message("No display is available to record.")
+                throw GlintError.message("No display is available to record.")
             }
             return (CaptureFrame.displayFilter(display: display, content: content, hideDesktop: options.hideDesktop), display.frame, nil)
         }
@@ -382,19 +382,19 @@ final class RecordingController {
         if let identifier = options.cameraDeviceID {
             device = devices.first { $0.uniqueID == identifier }
         } else { device = AVCaptureDevice.default(for: .video) }
-        guard let device else { throw CliptError.message("No camera is connected.") }
+        guard let device else { throw GlintError.message("No camera is connected.") }
         let session = AVCaptureSession()
         session.beginConfiguration()
         defer { session.commitConfiguration() }
         if session.canSetSessionPreset(.hd1280x720) { session.sessionPreset = .hd1280x720 }
         let input = try AVCaptureDeviceInput(device: device)
-        guard session.canAddInput(input) else { throw CliptError.message("The camera couldn’t be connected.") }
+        guard session.canAddInput(input) else { throw GlintError.message("The camera couldn’t be connected.") }
         session.addInput(input)
         let output = AVCaptureVideoDataOutput()
         output.videoSettings = [kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA]
         output.alwaysDiscardsLateVideoFrames = true
         output.setSampleBufferDelegate(delegate, queue: delegate.queue)
-        guard session.canAddOutput(output) else { throw CliptError.message("The camera output isn’t available.") }
+        guard session.canAddOutput(output) else { throw GlintError.message("The camera output isn’t available.") }
         session.addOutput(output)
         if let connection = output.connection(with: .video), connection.isVideoMirroringSupported {
             connection.automaticallyAdjustsVideoMirroring = false; connection.isVideoMirrored = false
@@ -404,7 +404,7 @@ final class RecordingController {
 
     nonisolated static func recordingsDirectory() throws -> URL {
         let base = try FileManager.default.url(for: .applicationSupportDirectory, in: .userDomainMask, appropriateFor: nil, create: true)
-        let directory = base.appendingPathComponent("Clipt/Recordings", isDirectory: true)
+        let directory = base.appendingPathComponent("Glint/Recordings", isDirectory: true)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         return directory
     }
@@ -416,7 +416,7 @@ final class RecordingController {
     nonisolated static func recoverInterruptedRecordings(in directory: URL) async throws -> [URL] {
         let folders = try FileManager.default.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil)
         var recovered: [URL] = []
-        for folder in folders where folder.pathExtension == "cliptvideo" {
+        for folder in folders where folder.pathExtension == "glintvideo" {
             let importedMarker = folder.appendingPathComponent("imported-to-library")
             if let data = try? Data(contentsOf: importedMarker),
                let value = String(data: data, encoding: .utf8), UUID(uuidString: value.trimmingCharacters(in: .whitespacesAndNewlines)) != nil {

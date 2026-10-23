@@ -44,7 +44,7 @@ final class VideoEditorModel {
 
     init(url: URL, onExport: @escaping (URL) -> Void) {
         originalURL = url; self.onExport = onExport
-        needsSaveLocation = url.pathExtension.lowercased() != "cliptvideo"
+        needsSaveLocation = url.pathExtension.lowercased() != "glintvideo"
         player.actionAtItemEnd = .pause
         timeObserver = player.addPeriodicTimeObserver(forInterval: CMTime(seconds: 0.05, preferredTimescale: 600), queue: .main) { [weak self] time in
             Task { @MainActor [weak self] in
@@ -64,7 +64,7 @@ final class VideoEditorModel {
         loadTask = Task { [weak self] in
             guard let self else { return }
             do {
-                if originalURL.pathExtension.lowercased() == "cliptvideo" {
+                if originalURL.pathExtension.lowercased() == "glintvideo" {
                     let project = try await Task.detached(priority: .userInitiated) { try VideoProject.load(from: self.originalURL) }.value
                     self.project = project; directory = originalURL
                 } else {
@@ -234,11 +234,11 @@ final class VideoEditorModel {
     }
 
     private func ensureBackgroundWorkspace() async throws -> URL {
-        guard let project, let directory else { throw CliptError.message("Open a video before adding a background.") }
+        guard let project, let directory else { throw GlintError.message("Open a video before adding a background.") }
         let workspace: URL
         if let backgroundDirectory { workspace = backgroundDirectory }
         else {
-            workspace = FileManager.default.temporaryDirectory.appendingPathComponent("Clipt-backgrounds-\(UUID().uuidString)", isDirectory: true)
+            workspace = FileManager.default.temporaryDirectory.appendingPathComponent("Glint-backgrounds-\(UUID().uuidString)", isDirectory: true)
             try FileManager.default.createDirectory(at: workspace, withIntermediateDirectories: false)
             backgroundDirectory = workspace
             scratchDirectories.append(workspace)
@@ -255,7 +255,7 @@ final class VideoEditorModel {
     }
 
     func importBackground(from url: URL) async throws {
-        guard !isSaving else { throw CliptError.message("Wait for the current save to finish.") }
+        guard !isSaving else { throw GlintError.message("Wait for the current save to finish.") }
         isSaving = true
         defer { isSaving = false }
         let workspace = try await ensureBackgroundWorkspace()
@@ -265,7 +265,7 @@ final class VideoEditorModel {
                   let image = CGImageSourceCreateThumbnailAtIndex(source, 0, [kCGImageSourceCreateThumbnailFromImageAlways: true,
                                                                              kCGImageSourceThumbnailMaxPixelSize: 7680,
                                                                              kCGImageSourceCreateThumbnailWithTransform: true] as CFDictionary) else {
-                throw CliptError.message("This background image couldn’t be opened.")
+                throw GlintError.message("This background image couldn’t be opened.")
             }
             try ImageFile.write(image, to: workspace.appendingPathComponent(filename))
         }.value
@@ -278,8 +278,8 @@ final class VideoEditorModel {
         var destination = source
         if needsSaveLocation || asNew {
             let panel = NSSavePanel()
-            panel.allowedContentTypes = [UTType(exportedAs: "app.clipt.video-project", conformingTo: .package)]
-            panel.nameFieldStringValue = "\(originalURL.deletingPathExtension().lastPathComponent).cliptvideo"
+            panel.allowedContentTypes = [UTType(exportedAs: "app.glint.video-project", conformingTo: .package)]
+            panel.nameFieldStringValue = "\(originalURL.deletingPathExtension().lastPathComponent).glintvideo"
             panel.canCreateDirectories = true
             guard panel.runModal() == .OK, let url = panel.url else { return false }
             destination = url
@@ -312,7 +312,7 @@ final class VideoEditorModel {
                     }
                     if let thumbnail { try? ImageFile.write(thumbnail, to: chosen.appendingPathComponent("preview.png")) }
                 } else {
-                    let temporary = chosen.deletingLastPathComponent().appendingPathComponent(".Clipt-\(UUID().uuidString).cliptvideo", isDirectory: true)
+                    let temporary = chosen.deletingLastPathComponent().appendingPathComponent(".Glint-\(UUID().uuidString).glintvideo", isDirectory: true)
                     defer { try? FileManager.default.removeItem(at: temporary) }
                     try FileManager.default.createDirectory(at: temporary, withIntermediateDirectories: false)
                     for file in [project.screenFile, project.cameraFile].compactMap({ $0 }) {
@@ -389,7 +389,7 @@ final class VideoEditorWindowController: NSWindowController, NSWindowDelegate, E
     init(url: URL, onExport: @escaping (URL) -> Void) {
         model = VideoEditorModel(url: url, onExport: onExport)
         let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1180, height: 780), styleMask: [.titled, .closable, .miniaturizable, .resizable], backing: .buffered, defer: false)
-        window.title = "\(url.deletingPathExtension().lastPathComponent) — Clipt"
+        window.title = "\(url.deletingPathExtension().lastPathComponent) — Glint"
         window.minSize = NSSize(width: 900, height: 620)
         window.contentViewController = NSHostingController(rootView: VideoEditorView(model: model))
         window.isReleasedWhenClosed = false

@@ -1,7 +1,7 @@
 import XCTest
 import CoreGraphics
 import ImageIO
-@testable import Clipt
+@testable import Glint
 
 final class ImageEditorTests: XCTestCase {
     func testCropRotateFlipGeometryRoundTrips() throws {
@@ -61,7 +61,7 @@ final class ImageEditorTests: XCTestCase {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: root) }
-        let url = root.appendingPathComponent("Test.clipt")
+        let url = root.appendingPathComponent("Test.glint")
         let source = try fixture(width: 20, height: 12)
         var document = ImageDocument(size: CGSize(width: 20, height: 12))
         var annotation = ImageAnnotation(tool: .image, rect: CGRect(x: 2, y: 2, width: 5, height: 4))
@@ -91,7 +91,7 @@ final class ImageEditorTests: XCTestCase {
         XCTAssertThrowsError(try document.validated())
 
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
-        let package = root.appendingPathComponent("Untrusted.clipt")
+        let package = root.appendingPathComponent("Untrusted.glint")
         try FileManager.default.createDirectory(at: package, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: root) }
         document = ImageDocument(size: CGSize(width: 20, height: 12))
@@ -298,7 +298,7 @@ final class ImageEditorTests: XCTestCase {
     }
 
     func testProjectChecksAssetCountBeforeOpeningAssets() throws {
-        let root = FileManager.default.temporaryDirectory.appendingPathComponent("\(UUID().uuidString).clipt")
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("\(UUID().uuidString).glint")
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: root) }
         var document = ImageDocument(size: CGSize(width: 20, height: 12))
@@ -314,7 +314,7 @@ final class ImageEditorTests: XCTestCase {
     }
 
     func testProjectChecksAggregatePixelBudgetBeforeDecodingAssets() throws {
-        let root = FileManager.default.temporaryDirectory.appendingPathComponent("\(UUID().uuidString).clipt")
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("\(UUID().uuidString).glint")
         try FileManager.default.createDirectory(at: root.appendingPathComponent("images"), withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: root) }
         var document = ImageDocument(size: CGSize(width: 20, height: 12))

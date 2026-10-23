@@ -4,7 +4,7 @@ body:
   - type: input
     id: version
     attributes:
-      label: Clipt and macOS versions
+      label: Glint and macOS versions
     validations:
       required: true
   - type: textarea

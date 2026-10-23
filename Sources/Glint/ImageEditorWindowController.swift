@@ -16,7 +16,7 @@ final class ImageEditorWindowController: NSWindowController, NSWindowDelegate, E
         let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1160, height: 780),
                               styleMask: [.titled, .closable, .miniaturizable, .resizable],
                               backing: .buffered, defer: false)
-        window.title = "\(url.deletingPathExtension().lastPathComponent) — Clipt"
+        window.title = "\(url.deletingPathExtension().lastPathComponent) — Glint"
         window.minSize = NSSize(width: 880, height: 600)
         window.isReleasedWhenClosed = false
         window.tabbingMode = .disallowed
@@ -90,8 +90,8 @@ final class ImageEditorWindowController: NSWindowController, NSWindowDelegate, E
         if let existing = model.projectURL { destination = existing }
         else {
             let panel = NSSavePanel()
-            panel.allowedContentTypes = [UTType(exportedAs: "app.clipt.image-project", conformingTo: .package)]
-            panel.nameFieldStringValue = model.inputURL.deletingPathExtension().lastPathComponent + ".clipt"
+            panel.allowedContentTypes = [UTType(exportedAs: "app.glint.image-project", conformingTo: .package)]
+            panel.nameFieldStringValue = model.inputURL.deletingPathExtension().lastPathComponent + ".glint"
             panel.message = "Projects keep original pixels and editable annotations. Export an image when sharing redacted content."
             panel.canCreateDirectories = true
             guard await panel.beginSheetModal(for: window) == .OK, let url = panel.url else { return false }

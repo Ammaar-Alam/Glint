@@ -13,7 +13,7 @@ struct SettingsView: View {
     @AppStorage("afterCapture") private var afterCapture = "popup"
     @AppStorage("shelfPosition") private var position = "bottomLeft"
     @AppStorage("shelfAutoDismiss") private var dismiss = 0.0
-    @AppStorage("filenameTemplate") private var filename = "Clipt {date} at {time}"
+    @AppStorage("filenameTemplate") private var filename = "Glint {date} at {time}"
     @AppStorage("retentionDays") private var retention = 0
     @AppStorage("captureSound") private var sound = false
     @AppStorage("automationEnabled") private var automation = false
@@ -62,7 +62,7 @@ struct SettingsView: View {
                             } catch { self.error = error.localizedDescription; login = false }
                         }
                     Toggle("Allow capture URLs", isOn: $automation)
-                    Text("Allows clipt:// commands to start captures. Keep off unless you use an automation tool.")
+                    Text("Allows glint:// commands to start captures. Keep off unless you use an automation tool.")
                         .font(.caption).foregroundStyle(.secondary)
                 }
             }.formStyle(.grouped).tabItem { Label("General", systemImage: "gearshape") }

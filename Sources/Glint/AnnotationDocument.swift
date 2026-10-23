@@ -249,7 +249,7 @@ struct ImageDocument: Codable, Equatable, Sendable {
     func validated() throws -> ImageDocument {
         let assets = Set(annotations.compactMap(\.imageID) + [background.imageID].compactMap { $0 })
         guard assets.count + 1 <= ImageProject.maximumAssetCount else {
-            throw CliptError.message("This project contains too many image assets.")
+            throw GlintError.message("This project contains too many image assets.")
         }
         guard version == 1,
               sourceSize.width.isFinite, sourceSize.height.isFinite,
@@ -266,7 +266,7 @@ struct ImageDocument: Codable, Equatable, Sendable {
               background.isValid, annotations.count <= 10_000,
               Set(annotations.map(\.id)).count == annotations.count,
               annotations.allSatisfy(\.isValid) else {
-            throw CliptError.message("This image project contains unsupported or invalid dimensions.")
+            throw GlintError.message("This image project contains unsupported or invalid dimensions.")
         }
         return self
     }
@@ -289,7 +289,7 @@ enum ImageProject {
     static func readImage(_ url: URL) throws -> CGImage {
         try Task.checkCancellation()
         guard let source = CGImageSourceCreateWithURL(url as CFURL, nil) else {
-            throw CliptError.message("This image couldn’t be opened.")
+            throw GlintError.message("This image couldn’t be opened.")
         }
         return try readImage(source)
     }
@@ -301,7 +301,7 @@ enum ImageProject {
             kCGImageSourceCreateThumbnailFromImageAlways: true,
             kCGImageSourceCreateThumbnailWithTransform: true,
             kCGImageSourceThumbnailMaxPixelSize: max(width, height)
-        ] as CFDictionary) else { throw CliptError.message("This image couldn’t be decoded.") }
+        ] as CFDictionary) else { throw GlintError.message("This image couldn’t be decoded.") }
         try Task.checkCancellation()
         return image
     }
@@ -312,14 +312,14 @@ enum ImageProject {
               let height = properties[kCGImagePropertyPixelHeight] as? Int,
               width > 0, height > 0, width <= 100_000, height <= 100_000,
               width * height <= 80_000_000 else {
-            throw CliptError.message("This image is too large or has invalid dimensions.")
+            throw GlintError.message("This image is too large or has invalid dimensions.")
         }
         return (width, height)
     }
 
     private static func pixelCount(at url: URL) throws -> Int {
         guard let source = CGImageSourceCreateWithURL(url as CFURL, [kCGImageSourceShouldCache: false] as CFDictionary) else {
-            throw CliptError.message("This image couldn’t be opened.")
+            throw GlintError.message("This image couldn’t be opened.")
         }
         let (width, height) = try dimensions(of: source)
         return width * height
@@ -331,21 +331,21 @@ enum ImageProject {
         let values = try url.resourceValues(forKeys: [.isRegularFileKey, .fileSizeKey])
         guard url.path.hasPrefix(root.path + "/"), values.isRegularFile == true,
               (values.fileSize ?? 0) <= 250_000_000 else {
-            throw CliptError.message("This project contains an invalid image file.")
+            throw GlintError.message("This project contains an invalid image file.")
         }
         return url
     }
 
     static func load(_ url: URL) throws -> ImageProjectContents {
         try Task.checkCancellation()
-        if url.pathExtension.lowercased() != "clipt" {
+        if url.pathExtension.lowercased() != "glint" {
             let source = try readImage(url)
             let document = try ImageDocument(size: CGSize(width: source.width, height: source.height)).validated()
             return ImageProjectContents(document: document, source: source, insertedImages: [:])
         }
         let documentURL = try file("document.json", in: url)
         let size = try documentURL.resourceValues(forKeys: [.fileSizeKey]).fileSize ?? 0
-        guard size <= 20_000_000 else { throw CliptError.message("This project is too large to open safely.") }
+        guard size <= 20_000_000 else { throw GlintError.message("This project is too large to open safely.") }
         let document = try JSONDecoder().decode(ImageDocument.self, from: Data(contentsOf: documentURL)).validated()
         let assetIDs = Set(document.annotations.compactMap(\.imageID) + [document.background.imageID].compactMap { $0 })
         let originalURL = try file("original.png", in: url)
@@ -356,19 +356,19 @@ enum ImageProject {
             try Task.checkCancellation()
             let assetURL = try file("images/\(id.uuidString).png", in: url)
             decodedPixels += try pixelCount(at: assetURL)
-            guard decodedPixels <= maximumDecodedPixels else { throw CliptError.message("This project contains too many large images.") }
+            guard decodedPixels <= maximumDecodedPixels else { throw GlintError.message("This project contains too many large images.") }
             assetURLs[id] = assetURL
         }
         let source = try readImage(originalURL)
         guard source.width == Int(document.sourceSize.width), source.height == Int(document.sourceSize.height) else {
-            throw CliptError.message("The project’s original image doesn’t match its document.")
+            throw GlintError.message("The project’s original image doesn’t match its document.")
         }
         var inserted: [UUID: CGImage] = [:]
         decodedPixels = source.width * source.height
         for (id, assetURL) in assetURLs {
             let image = try readImage(assetURL)
             decodedPixels += image.width * image.height
-            guard decodedPixels <= maximumDecodedPixels else { throw CliptError.message("This project contains too many large images.") }
+            guard decodedPixels <= maximumDecodedPixels else { throw GlintError.message("This project contains too many large images.") }
             inserted[id] = image
         }
         return ImageProjectContents(document: document, source: source, insertedImages: inserted)
@@ -381,9 +381,9 @@ enum ImageProject {
             guard let image = contents.insertedImages[id] else { return total }
             return total + image.width * image.height
         }
-        guard decodedPixels <= maximumDecodedPixels else { throw CliptError.message("This project contains too many large images.") }
+        guard decodedPixels <= maximumDecodedPixels else { throw GlintError.message("This project contains too many large images.") }
         let manager = FileManager.default
-        let staging = url.deletingLastPathComponent().appendingPathComponent(".Clipt-\(UUID().uuidString).clipt")
+        let staging = url.deletingLastPathComponent().appendingPathComponent(".Glint-\(UUID().uuidString).glint")
         try manager.createDirectory(at: staging, withIntermediateDirectories: true)
         defer { try? manager.removeItem(at: staging) }
         let encoder = JSONEncoder()
@@ -394,7 +394,7 @@ enum ImageProject {
             try manager.createDirectory(at: staging.appendingPathComponent("images"), withIntermediateDirectories: true)
             for id in usedIDs {
                 guard let image = contents.insertedImages[id] else {
-                    throw CliptError.message("An image used in this project is missing.")
+                    throw GlintError.message("An image used in this project is missing.")
                 }
                 try ImageFile.write(image, to: staging.appendingPathComponent("images/\(id.uuidString).png"))
             }
