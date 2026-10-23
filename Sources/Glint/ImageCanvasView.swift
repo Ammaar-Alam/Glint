@@ -50,7 +50,8 @@ final class ImageCanvasView: NSView {
         guard let document = model.document else { return }
         let newSize = CGSize(width: document.canvasSize.width + 80, height: document.canvasSize.height + 80)
         if frame.size != newSize { setFrameSize(newSize) }
-        if fitsWindow, window != nil { fitToWindow() }
+        // refitting on every tick of a padding slider makes the canvas jump
+        if fitsWindow, window != nil, !model.isAdjusting { fitToWindow() }
         needsDisplay = true
     }
 

@@ -363,4 +363,24 @@ final class ImageEditorTests: XCTestCase {
         let offset = y * image.width * 4 + x * 4
         return Array(UnsafeBufferPointer(start: bytes + offset, count: 4))
     }
+
+    @MainActor
+    func testSliderDragIsOneUndoStep() async throws {
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("\(UUID().uuidString).png")
+        defer { try? FileManager.default.removeItem(at: url) }
+        try ImageFile.write(fixture(width: 20, height: 12), to: url)
+        let model = ImageEditorModel(url: url, onExport: { _ in })
+        defer { model.shutdown() }
+        for _ in 0..<100 where model.document == nil { try await Task.sleep(for: .milliseconds(20)) }
+        model.undoManager.groupsByEvent = false
+        model.undoManager.beginUndoGrouping()
+        model.beginAdjusting()
+        for padding in stride(from: 10.0, through: 90, by: 10) { model.mutate("Padding") { $0.background.padding = padding } }
+        model.endAdjusting()
+        model.undoManager.endUndoGrouping()
+        XCTAssertEqual(model.document?.background.padding, 90)
+        model.undoManager.undo()
+        XCTAssertEqual(model.document?.background.padding, ImageBackground().padding)
+        XCTAssertFalse(model.undoManager.canUndo)
+    }
 }
