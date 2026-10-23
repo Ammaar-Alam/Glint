@@ -26,8 +26,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var captureCommandMenu: NSMenu?
     private var historyWindow: NSWindow?
     private var settingsWindow: NSWindow?
-    private var recordingSetup: NSWindow?
     private var recordingPanel: NSPanel?
+    private var recordingOptions = RecordingOptions()
     private var editors: [NSWindowController] = []
     private var pins: [PinnedImagePanel] = []
     private var captureTask: Task<Void, Never>?
@@ -45,7 +45,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let launchReason = launchEvent?.paramDescriptor(forKeyword: keyAEPropData)?.enumCodeValue
         let launchInBackground = launchEvent?.eventID == kAEOpenApplication &&
             (launchReason == keyAELaunchedAsLogInItem || launchReason == keyAELaunchedAsServiceItem)
-        UserDefaults.standard.register(defaults: ["windowShadow": true, "afterCapture": "popup", "shelfPosition": "bottomLeft", "filenameTemplate": "Glint {date} at {time}", "showMenuBarIcon": true])
+        UserDefaults.standard.register(defaults: ["windowShadow": true, "shelfPosition": "bottomLeft", "filenameTemplate": "Glint {date} at {time}", "showMenuBarIcon": true,
+                                                  "showMagnifier": true, "shelfScale": 1.0, "shelfFollowsPointer": true])
+        CaptureAction.migrate()
         makeMainMenu()
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         statusItem.button?.image = Self.menuBarIcon
@@ -57,16 +59,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         updateStatus()
         shortcuts.onAction = { [weak self] in self?.perform($0) }
         shortcuts.start()
-        capture.onRecord = { [weak self] in
+        capture.onRecord = { [weak self] target, options in
             Task { @MainActor [weak self] in
                 await self?.captureTask?.value
-                self?.showRecordingSetup()
+                self?.startRecording(options, target: target)
             }
         }
-        shelf.onEdit = { [weak self] in self?.edit($0) }
-        shelf.onCopy = { [weak self] in self?.copy($0) }
-        shelf.onSave = { [weak self] in self?.save($0) }
-        shelf.onPin = { [weak self] in self?.pin($0) }
+        shelf.onCommand = { [weak self] in self?.perform($0, on: $1) }
         shelf.onHistory = { [weak self] in self?.showHistory() }
         recorder.onFailure = { [weak self] error in
             guard let self else { return }
@@ -232,6 +231,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             record.show(shortcuts.shortcuts[.record])
             record.isEnabled = recorder.state == .idle
             menu.addItem(record)
+            let gif = HandlerMenuItem("Record GIF…", symbol: "photo.stack") { [weak self] in self?.showRecordingSetup(.gif) }
+            gif.isEnabled = recorder.state == .idle
+            menu.addItem(gif)
         }
     }
 
@@ -286,16 +288,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
     }
 
-    func takeCapture(_ mode: CaptureMode) {
+    func takeCapture(_ mode: CaptureMode, recording: RecordingFormat? = nil) {
         guard terminationTask == nil, captureTask == nil, !capture.isCapturing, recorder.state == .idle else { NSSound.beep(); return }
         captureTask = Task {
             defer { captureTask = nil }
             do {
-                guard let result = try await captureWithHiddenWindows(mode) else { return }
+                guard let result = try await captureWithHiddenWindows(mode, recording: recording) else { return }
                 if let text = result.recognizedText {
                     showRecognizedText(text)
                     await cleanupTemporaryCapture(result.url)
-                } else { handleCapture(try await ingestTemporaryCapture(result.url)) }
+                } else { handleCapture(try await ingestTemporaryCapture(await applyDefaultBackground(result.url))) }
                 if UserDefaults.standard.bool(forKey: "captureSound") { NSSound(named: "Pop")?.play() }
             } catch is CancellationError {} catch { showError(error) }
         }
@@ -320,19 +322,94 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         shelf.restoreAfterCapture()
     }
 
-    private func captureWithHiddenWindows(_ mode: CaptureMode) async throws -> CaptureResult? {
+    private func captureWithHiddenWindows(_ mode: CaptureMode, recording: RecordingFormat? = nil) async throws -> CaptureResult? {
         let hidden = hideCaptureWindows()
         defer { restoreCaptureWindows(hidden) }
         configureCapture()
-        return try await capture.capture(mode, delay: TimeInterval(UserDefaults.standard.integer(forKey: "captureDelay")))
+        return try await capture.capture(mode, recording: recording)
     }
 
-    private func handleCapture(_ item: CaptureItem) {
-        if UserDefaults.standard.bool(forKey: "autoCopy") { copy(item) }
-        switch UserDefaults.standard.string(forKey: "afterCapture") {
-        case "editor": edit(item)
-        case "save": save(item)
-        default: shelf.present(item)
+    private func handleCapture(_ item: CaptureItem, recording: Bool = false) {
+        let actions = CaptureAction.enabled(recording: recording)
+        if item.kind == .videoProject {
+            deliverRecording(item, save: actions.contains(.save), copy: actions.contains(.copy))
+        } else {
+            if actions.contains(.copy) { copy(item) }
+            if actions.contains(.save) {
+                if let folder = CaptureFolder.current { saveToFolder(item, folder: folder) } else { save(item) }
+            }
+        }
+        if actions.contains(.editor) { edit(item) }
+        if actions.contains(.popup) { shelf.present(item) }
+    }
+
+    // a failed style keeps the plain capture rather than losing it
+    private func applyDefaultBackground(_ url: URL) async -> URL {
+        guard let preset = EditorDefaults.backgroundPreset else { return url }
+        let presets = ImageEditorModel.presetDirectory
+        do {
+            let project = try await Task.detached(priority: .userInitiated) { try EditorDefaults.styledProject(url, background: preset, presetDirectory: presets) }.value
+            await cleanupTemporaryCapture(url)
+            return project
+        } catch {
+            library.error = "The default background couldn’t be applied: \(error.localizedDescription)"
+            return url
+        }
+    }
+
+    private func saveToFolder(_ item: CaptureItem, folder: URL) {
+        guard let source = item.shareURL(in: library.root) else { edit(item); return }
+        let format = item.kind.isVideo ? nil : ScreenshotFormat.current
+        pendingWrites += 1
+        Task {
+            defer { pendingWrites -= 1 }
+            do {
+                try await Task.detached {
+                    if let format { _ = try CaptureFolder.saveImage(source, named: item.title, format: format, in: folder) }
+                    else { _ = try CaptureFolder.saveFile(source, named: item.title, in: folder) }
+                }.value
+            } catch { showError(error) }
+        }
+    }
+
+    // recordings are shared as a rendered movie, saved to the folder or asked for, and copied as a file
+    private func deliverRecording(_ item: CaptureItem, save: Bool, copy: Bool) {
+        guard save else { if copy { exportRecording(item, to: nil, copy: true) }; return }
+        if let folder = CaptureFolder.current {
+            do { exportRecording(item, to: try CaptureFolder.destination(in: folder, name: item.title, pathExtension: "mp4"), copy: copy) }
+            catch { showError(error) }
+            return
+        }
+        let panel = NSSavePanel()
+        panel.nameFieldStringValue = item.title + ".mp4"
+        panel.canCreateDirectories = true
+        panel.allowedContentTypes = [.mpeg4Movie]
+        NSApp.activate(ignoringOtherApps: true)
+        panel.begin { response in
+            let url = response == .OK ? panel.url : nil
+            if url != nil || copy { self.exportRecording(item, to: url, copy: copy) }
+        }
+    }
+
+    private func exportRecording(_ item: CaptureItem, to target: URL?, copy: Bool) {
+        let clipboard = ClipboardWriter.general
+        let request = copy ? clipboard.begin() : nil
+        let directory = item.url(in: library.root)
+        pendingWrites += 1
+        Task {
+            defer { pendingWrites -= 1 }
+            do {
+                // ponytail: a copy-only movie lives in the temporary folder until macOS clears it
+                let destination = try target ?? {
+                    let folder = FileManager.default.temporaryDirectory.appendingPathComponent("Glint-\(UUID().uuidString)", isDirectory: true)
+                    try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+                    return folder.appendingPathComponent(item.title + ".mp4")
+                }()
+                let project = try VideoProject.load(from: directory)
+                defer { CaptureFolder.release(destination) }
+                try await VideoExporter.export(project: project, directory: directory, destination: destination, format: .mp4) { _ in }
+                if let request { clipboard.commit(request) { _ = $0.writeObjects([destination as NSURL]) } }
+            } catch { showError(error) }
         }
     }
 
@@ -416,7 +493,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         clipboardTask?.cancel()
         let clipboard = ClipboardWriter.general
         let request = clipboard.begin()
-        if item.kind.isVideo {
+        // a GIF goes as its file so it stays animated where it is pasted
+        if item.kind.isVideo || item.filename.hasSuffix(".gif") {
             if item.kind == .videoProject { edit(item); return }
             clipboard.commit(request) { _ = $0.writeObjects([item.url(in: library.root) as NSURL]) }
             return
@@ -443,19 +521,50 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     func save(_ item: CaptureItem) {
         if item.kind == .videoProject { edit(item); return }
         guard let source = item.shareURL(in: library.root) else { return }
+        let format = item.kind.isVideo ? nil : ScreenshotFormat.current
+        let type = format?.type ?? UTType(filenameExtension: source.pathExtension) ?? .data
         let panel = NSSavePanel()
-        panel.nameFieldStringValue = item.title + "." + source.pathExtension
+        panel.nameFieldStringValue = item.title + "." + (type.preferredFilenameExtension ?? source.pathExtension)
         panel.canCreateDirectories = true
-        panel.allowedContentTypes = [UTType(filenameExtension: source.pathExtension) ?? .data]
+        panel.allowedContentTypes = [type]
         NSApp.activate(ignoringOtherApps: true)
         panel.begin { response in
             guard response == .OK, let destination = panel.url else { return }
             self.pendingWrites += 1
             Task {
                 defer { self.pendingWrites -= 1 }
-                do { try await Task.detached { try ExportFile.copy(source, to: destination) }.value }
-                catch { showError(error) }
+                do {
+                    try await Task.detached {
+                        if let format { try CaptureFolder.writeImage(source, format: format, to: destination) }
+                        else { try ExportFile.copy(source, to: destination) }
+                    }.value
+                } catch { showError(error) }
             }
+        }
+    }
+
+    func perform(_ command: CaptureCommand, on item: CaptureItem) {
+        // projects reveal and share their flattened render, never the package
+        let file = item.shareURL(in: library.root) ?? item.url(in: library.root)
+        switch command {
+        case .copy: copy(item)
+        case .save: saveToFolder(item, folder: CaptureFolder.current ?? URL.desktopDirectory)
+        case .saveAs: save(item)
+        case .edit: edit(item)
+        case .pin: pin(item)
+        case .reveal: NSWorkspace.shared.activateFileViewerSelecting([file])
+        case .copyPath:
+            clipboardTask?.cancel()
+            let clipboard = ClipboardWriter.general
+            clipboard.commit(clipboard.begin()) { _ = $0.setString(file.path, forType: .string) }
+        case .trash:
+            Task {
+                do {
+                    try await library.trash(item)
+                    if shelf.shelf.ids.contains(item.id) { shelf.dismiss(item) }
+                } catch { showError(error) }
+            }
+        case .rename, .close, .closeAll: break
         }
     }
 
@@ -489,17 +598,30 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     func showHistory() {
         if historyWindow == nil {
-            historyWindow = makeWindow(title: "Glint", size: NSSize(width: 960, height: 640), root: HistoryView(
-                library: library, onEdit: edit, onCopy: copy, onSave: save, onPin: pin, onImport: openFile,
-                onCapture: { [weak self] in self?.takeCapture(.area) }
+            let window = makeWindow(title: "Glint", size: NSSize(width: 1000, height: 680), root: HistoryView(
+                library: library, shortcuts: shortcuts, onCommand: { [weak self] in self?.perform($0, on: $1) }, onImport: openFile,
+                onCapture: { [weak self] in self?.takeCapture(.area) }, onRecord: { [weak self] in self?.showRecordingSetup() }
             ))
+            // an empty unified toolbar only sets the titlebar height, the view draws the bar
+            window.styleMask.insert(.fullSizeContentView)
+            window.titlebarAppearsTransparent = true
+            window.titleVisibility = .hidden
+            window.toolbar = NSToolbar()
+            window.toolbarStyle = .unified
+            historyWindow = window
         }
         historyWindow?.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
     }
 
     func showSettings() {
-        if settingsWindow == nil { settingsWindow = makeWindow(title: "Glint Settings", size: NSSize(width: 600, height: 590), root: SettingsView(shortcuts: shortcuts)) }
+        if settingsWindow == nil {
+            let window = makeWindow(title: "Glint Settings", size: NSSize(width: 760, height: 580), root: SettingsView(shortcuts: shortcuts))
+            window.styleMask.insert(.fullSizeContentView)
+            window.titlebarAppearsTransparent = true
+            window.titleVisibility = .hidden
+            settingsWindow = window
+        }
         settingsWindow?.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
     }
@@ -515,30 +637,45 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         NSApp.activate(ignoringOtherApps: true)
     }
 
-    func showRecordingSetup() {
-        guard terminationTask == nil, recorder.state == .idle, recordingTask == nil, !capture.isCapturing else { recordingPanel?.orderFrontRegardless(); return }
-        recordingSetup = makeWindow(title: "Record", size: NSSize(width: 460, height: 560), root: RecordingSetupView { [weak self] options in self?.startRecording(options) })
-        recordingSetup?.makeKeyAndOrderFront(nil)
-        NSApp.activate(ignoringOtherApps: true)
+    // recording starts from the capture overlay with its recording bar showing
+    func showRecordingSetup(_ format: RecordingFormat = .video) {
+        guard terminationTask == nil, recorder.state == .idle, recordingTask == nil, recordingPanel?.isVisible != true else {
+            recordingPanel?.orderFrontRegardless(); return
+        }
+        takeCapture(.allInOne, recording: format)
     }
 
-    private func startRecording(_ options: RecordingOptions) {
+    private func startRecording(_ options: RecordingOptions, target: CaptureSelection) {
         guard terminationTask == nil, recorder.state == .idle, recordingTask == nil, !capture.isCapturing else { return }
-        recordingSetup?.orderOut(nil)
+        recordingOptions = options
         recordingHiddenWindows = hideCaptureWindows()
-        let panel = NSPanel(contentRect: NSRect(x: 0, y: 0, width: 360, height: 100), styleMask: [.titled, .nonactivatingPanel], backing: .buffered, defer: false)
+        let panel = NSPanel(contentRect: NSRect(x: 0, y: 0, width: 320, height: 72), styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
         panel.title = "Recording"
         panel.level = .floating
+        panel.isOpaque = false
+        panel.backgroundColor = .clear
+        panel.hasShadow = false
         panel.hidesOnDeactivate = false
         panel.isReleasedWhenClosed = false
         panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
-        panel.contentView = NSHostingView(rootView: RecordingControls(recorder: recorder, onPause: togglePause, onStop: stopRecording, onCancel: { [weak self] in self?.recordingTask?.cancel() }))
-        panel.center()
+        let host = FirstMouseHostingView(rootView: RecordingControls(
+            recorder: recorder, showsMicrophone: options.capturesMicrophone, onPause: togglePause, onStop: stopRecording,
+            onCancel: { [weak self] in self?.recordingTask?.cancel() },
+            onRestart: { [weak self] in self?.discardRecording(restart: true) },
+            onDelete: { [weak self] in self?.discardRecording(restart: false) }))
+        host.sizingOptions = []
+        panel.contentView = host
+        let screen = NSScreen.screens.first { $0.frame.contains(NSEvent.mouseLocation) } ?? NSScreen.main
+        if let frame = screen?.visibleFrame {
+            // wide enough for every state, the capsule centers itself
+            let size = CGSize(width: 420, height: host.fittingSize.height)
+            panel.setFrame(CGRect(x: (frame.midX - size.width / 2).rounded(), y: frame.minY + 8, width: size.width, height: size.height), display: false)
+        }
         recordingPanel = panel
         panel.orderFrontRegardless()
         recordingTask = Task {
             defer { recordingTask = nil }
-            do { try await recorder.start(options: options) }
+            do { try await recorder.start(options: options, target: target) }
             catch is CancellationError { panel.orderOut(nil); restoreRecordingWindows() }
             catch { panel.orderOut(nil); restoreRecordingWindows(); showError(error) }
         }
@@ -550,10 +687,35 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         Task {
             defer { pendingWrites -= 1 }
             do {
-                let item = try await finishRecording()
-                edit(item)
+                let item = try await finishRecording(gif: recordingOptions.format == .gif)
+                // a recorded gif goes straight to the popup, video projects follow the recording actions
+                if item.kind.isVideo { handleCapture(item, recording: true) } else { shelf.present(item) }
                 if let warning = recorder.lastWarning { showError(GlintError.message(warning)) }
             } catch { showError(error) }
+        }
+    }
+
+    // restart and delete throw away what was recorded, so they ask first
+    private func discardRecording(restart: Bool) {
+        guard recorder.state == .recording || recorder.state == .paused else { return }
+        let alert = NSAlert()
+        alert.messageText = restart ? "Restart recording?" : "Delete recording?"
+        alert.informativeText = "What you’ve recorded so far will be deleted."
+        alert.addButton(withTitle: restart ? "Restart" : "Delete")
+        alert.addButton(withTitle: "Cancel")
+        if !restart { alert.buttons.first?.hasDestructiveAction = true }
+        NSApp.activate(ignoringOtherApps: true)
+        guard alert.runModal() == .alertFirstButtonReturn, recorder.state == .recording || recorder.state == .paused else { return }
+        let options = recordingOptions
+        pendingWrites += 1
+        Task {
+            defer { pendingWrites -= 1 }
+            do {
+                defer { recordingPanel?.orderOut(nil); restoreRecordingWindows() }
+                let url = try await recorder.stop()
+                try await Task.detached(priority: .utility) { try FileManager.default.removeItem(at: url) }.value
+            } catch { showError(error); return }
+            if restart { showRecordingSetup(options.format) }
         }
     }
 
@@ -571,9 +733,27 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         recordingHiddenWindows.removeAll()
     }
 
-    private func finishRecording() async throws -> CaptureItem {
-        defer { recordingPanel?.orderOut(nil); restoreRecordingWindows() }
-        return try await ingestRecording(try await recorder.stop())
+    // a GIF that fails to render falls back to the saved project
+    private func finishRecording(gif: Bool = false) async throws -> CaptureItem {
+        let panel = recordingPanel
+        defer { panel?.orderOut(nil) }
+        let item: CaptureItem
+        do {
+            item = try await ingestRecording(try await recorder.stop())
+            restoreRecordingWindows()
+        } catch { restoreRecordingWindows(); throw error }
+        guard gif else { return item }
+        (panel?.contentView as? FirstMouseHostingView<RecordingControls>)?.rootView.saving = true
+        do { return try await makeGIF(from: item) }
+        catch { showError(error); return item }
+    }
+
+    private func makeGIF(from item: CaptureItem) async throws -> CaptureItem {
+        let project = item.url(in: library.root)
+        let output = ImageFile.temporaryURL(extension: "gif")
+        do { try await VideoExporter.recordingGIF(project: project, destination: output) }
+        catch { await cleanupTemporaryCapture(output); throw error }
+        return try await ingestTemporaryCapture(output)
     }
 
     private func ingestRecording(_ url: URL) async throws -> CaptureItem {
@@ -668,6 +848,8 @@ enum ExportFile {
             throw error
         }
     }
+
+    // the first free name, numbered the way Finder does
 }
 
 struct OCRResultView: View {

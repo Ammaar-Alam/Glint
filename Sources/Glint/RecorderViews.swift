@@ -2,149 +2,194 @@ import AppKit
 import AVFoundation
 import SwiftUI
 
-struct RecordingSetupView: View {
-    let onRecord: (RecordingOptions) -> Void
-    @State private var options = RecordingOptions()
+// the recording half of the capture bar
+struct RecordingBarControls: View {
+    @Binding var options: RecordingOptions
 
     var body: some View {
-        VStack(spacing: 0) {
-            Form {
-                Section {
-                    Picker("Capture", selection: $options.mode) {
-                        ForEach(RecordingMode.allCases) { Text($0.rawValue).tag($0) }
-                    }
-                    Picker("Countdown", selection: $options.countdown) {
-                        Text("None").tag(0)
-                        Text("3 seconds").tag(3)
-                        Text("5 seconds").tag(5)
-                        Text("10 seconds").tag(10)
-                    }
-                }
-                Section("Audio & camera") {
-                    Toggle("System audio", isOn: $options.capturesSystemAudio)
-                    Toggle("Microphone", isOn: $options.capturesMicrophone)
-                    if options.capturesMicrophone {
-                        Picker("Microphone", selection: $options.microphoneDeviceID) {
-                            Text("System default").tag(String?.none)
-                            ForEach(microphones, id: \.uniqueID) { Text($0.localizedName).tag(Optional($0.uniqueID)) }
-                        }
-                    }
-                    Toggle("Camera", isOn: $options.capturesCamera)
-                    if options.capturesCamera {
-                        Picker("Camera", selection: $options.cameraDeviceID) {
-                            Text("System default").tag(String?.none)
-                            ForEach(cameras, id: \.uniqueID) { Text($0.localizedName).tag(Optional($0.uniqueID)) }
-                        }
-                    }
-                }
-                Section("Appearance") {
-                    Toggle("Hide desktop items", isOn: $options.hideDesktop)
-                    Toggle("Show cursor", isOn: $options.showsCursor)
-                    Toggle("Highlight clicks", isOn: $options.showsClicks)
-                    Toggle("Record keys", isOn: $options.showsKeystrokes)
-                    if options.showsKeystrokes {
-                        Toggle("Show shortcuts only", isOn: $options.keystrokesOnlyShortcuts)
-                        Text("All keys typed during recording are stored in the editable project. Only enable for non-sensitive recordings.")
-                            .font(.caption).foregroundStyle(.secondary)
-                    }
-                }
-                Section("Quality") {
-                    Picker("Frame rate", selection: $options.framesPerSecond) {
-                        Text("24 fps").tag(24)
-                        Text("30 fps").tag(30)
-                        Text("60 fps").tag(60)
-                    }
-                    Picker("Resolution", selection: $options.maximumDimension) {
-                        Text("1080p").tag(1920)
-                        Text("1440p").tag(2560)
-                        Text("4K").tag(3840)
-                    }
-                }
-            }.formStyle(.grouped)
-            HStack {
-                Spacer()
-                Button("Record", systemImage: "record.circle") {
-                    saveOptions()
-                    onRecord(options)
-                }
-                .keyboardShortcut(.defaultAction)
-                .buttonStyle(.borderedProminent)
-                .controlSize(.large)
-            }.padding(16)
+        HStack(spacing: 2) {
+            Segmented {
+                format(.video, "Video")
+                format(.gif, "GIF")
+            }
+            BarDivider()
+            toggle($options.capturesSystemAudio, on: "speaker.wave.2.fill", off: "speaker.slash", help: "System audio")
+            toggle($options.capturesMicrophone, on: "mic.fill", off: "mic.slash", help: "Microphone")
+            devices(Self.microphones, selection: $options.microphoneDeviceID, enabled: $options.capturesMicrophone, help: "Choose microphone")
+            toggle($options.capturesCamera, on: "video.fill", off: "video.slash", help: "Camera")
+            devices(Self.cameras, selection: $options.cameraDeviceID, enabled: $options.capturesCamera, help: "Choose camera")
+            BarDivider()
+            toggle($options.showsCursor, on: "cursorarrow", off: "cursorarrow.slash", help: "Cursor")
+            toggle($options.showsClicks, on: "cursorarrow.click.2", off: "cursorarrow.click", help: "Clicks")
+            toggle($options.showsKeystrokes, on: "keyboard.fill", off: "keyboard", help: "Keystrokes. Every key you type is saved with the recording")
+            MenuButton(help: "Options", items: menu) { Image(systemName: "slider.horizontal.3") }
         }
-        .frame(minWidth: 420, minHeight: 520)
-        .onAppear { loadOptions() }
     }
 
-    private var microphones: [AVCaptureDevice] {
+    private func format(_ value: RecordingFormat, _ title: String) -> some View {
+        Button { options.format = value } label: { Text(title).font(.system(size: 12, weight: .semibold)) }
+            .buttonStyle(ToolButtonStyle(selected: options.format == value, size: CGSize(width: 44, height: 24), tint: .primary))
+            .accessibilityAddTraits(options.format == value ? .isSelected : [])
+    }
+
+    private func toggle(_ isOn: Binding<Bool>, on: String, off: String, help: String) -> some View {
+        Button { isOn.wrappedValue.toggle() } label: {
+            Image(systemName: isOn.wrappedValue ? on : off)
+                .foregroundStyle(isOn.wrappedValue ? Color.primary : Color.secondary)
+        }
+        .buttonStyle(ToolButtonStyle(selected: isOn.wrappedValue, tint: .primary))
+        .help(help)
+        .accessibilityLabel(help)
+        .accessibilityValue(isOn.wrappedValue ? "On" : "Off")
+    }
+
+    private func devices(_ list: [AVCaptureDevice], selection: Binding<String?>, enabled: Binding<Bool>, help: String) -> some View {
+        MenuButton(help: help, width: 14, items: {
+            ([nil] + list.map(Optional.some)).map { device in
+                let item = HandlerMenuItem(device?.localizedName ?? "System Default") {
+                    selection.wrappedValue = device?.uniqueID
+                    enabled.wrappedValue = true
+                }
+                item.state = selection.wrappedValue == device?.uniqueID ? .on : .off
+                return item
+            }
+        }) {
+            Image(systemName: "chevron.down").font(.system(size: 8, weight: .bold)).foregroundStyle(.secondary)
+        }
+        .padding(.leading, -2)
+    }
+
+    private func menu() -> [NSMenuItem] {
+        func submenu(_ title: String, _ choices: [(String, Int)], _ value: WritableKeyPath<RecordingOptions, Int>) -> NSMenuItem {
+            let item = NSMenuItem(title: title, action: nil, keyEquivalent: "")
+            let menu = NSMenu()
+            for (name, number) in choices {
+                let choice = HandlerMenuItem(name) { options[keyPath: value] = number }
+                choice.state = options[keyPath: value] == number ? .on : .off
+                menu.addItem(choice)
+            }
+            item.submenu = menu
+            return item
+        }
+        let desktop = HandlerMenuItem("Hide Desktop Icons") { options.hideDesktop.toggle() }
+        desktop.state = options.hideDesktop ? .on : .off
+        let shortcuts = HandlerMenuItem("Only Show Shortcuts") { options.keystrokesOnlyShortcuts.toggle() }
+        shortcuts.state = options.keystrokesOnlyShortcuts ? .on : .off
+        shortcuts.isEnabled = options.showsKeystrokes
+        return [submenu("Frame Rate", [("24 fps", 24), ("30 fps", 30), ("60 fps", 60)], \.framesPerSecond),
+                submenu("Resolution", [("1080p", 1920), ("1440p", 2560), ("4K", 3840)], \.maximumDimension),
+                .separator(), desktop, shortcuts]
+    }
+
+    private static var microphones: [AVCaptureDevice] {
         AVCaptureDevice.DiscoverySession(deviceTypes: [.microphone, .external], mediaType: .audio, position: .unspecified).devices
     }
-    private var cameras: [AVCaptureDevice] {
+    private static var cameras: [AVCaptureDevice] {
         AVCaptureDevice.DiscoverySession(deviceTypes: [.builtInWideAngleCamera, .external, .continuityCamera], mediaType: .video, position: .unspecified).devices
-    }
-
-    private func saveOptions() {
-        let defaults = UserDefaults.standard
-        defaults.set(options.mode.rawValue, forKey: "record.mode")
-        defaults.set(options.countdown, forKey: "record.countdown")
-        defaults.set(options.framesPerSecond, forKey: "record.fps")
-        defaults.set(options.maximumDimension, forKey: "record.size")
-        defaults.set(options.capturesSystemAudio, forKey: "record.systemAudio")
-        defaults.set(options.capturesMicrophone, forKey: "record.microphone")
-        defaults.set(options.capturesCamera, forKey: "record.camera")
-        defaults.set(options.showsCursor, forKey: "record.cursor")
-        defaults.set(options.hideDesktop, forKey: "record.hideDesktop")
-        defaults.set(options.showsClicks, forKey: "record.clicks")
-        defaults.set(options.showsKeystrokes, forKey: "record.keys")
-        defaults.set(options.keystrokesOnlyShortcuts, forKey: "record.shortcutsOnly")
-    }
-
-    private func loadOptions() {
-        let defaults = UserDefaults.standard
-        guard let mode = defaults.string(forKey: "record.mode").flatMap(RecordingMode.init(rawValue:)) else { return }
-        options.mode = mode
-        options.countdown = defaults.integer(forKey: "record.countdown")
-        options.framesPerSecond = defaults.integer(forKey: "record.fps")
-        options.maximumDimension = defaults.integer(forKey: "record.size")
-        options.capturesSystemAudio = defaults.bool(forKey: "record.systemAudio")
-        options.capturesMicrophone = defaults.bool(forKey: "record.microphone")
-        options.capturesCamera = defaults.bool(forKey: "record.camera")
-        options.showsCursor = defaults.bool(forKey: "record.cursor")
-        options.hideDesktop = defaults.bool(forKey: "record.hideDesktop")
-        options.showsClicks = defaults.bool(forKey: "record.clicks")
-        options.showsKeystrokes = defaults.bool(forKey: "record.keys")
-        options.keystrokesOnlyShortcuts = defaults.bool(forKey: "record.shortcutsOnly")
     }
 }
 
+@MainActor
+protocol RecordingStatus: AnyObject {
+    var state: RecordingState { get }
+    var elapsed: TimeInterval { get }
+    var countdownRemaining: Int { get }
+    var microphoneLevel: Double { get }
+}
+
+extension RecordingController: RecordingStatus {}
+
+// floating capsule shown while a recording runs
 struct RecordingControls: View {
-    let recorder: RecordingController
+    let recorder: any RecordingStatus
+    var showsMicrophone = false
+    var saving = false
     let onPause: () -> Void
     let onStop: () -> Void
     let onCancel: () -> Void
+    let onRestart: () -> Void
+    let onDelete: () -> Void
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var pulse = false
 
     var body: some View {
-        VStack(spacing: 12) {
-            HStack(spacing: 14) {
-                Circle().fill(recorder.state == .paused ? Color.orange : .red).frame(width: 10, height: 10)
-                if recorder.state == .preparing {
-                    Text(recorder.countdownRemaining > 0 ? "\(recorder.countdownRemaining)" : "Preparing…").monospacedDigit()
-                    Spacer()
-                    Button("Cancel", action: onCancel)
-                } else if recorder.state == .stopping {
-                    ProgressView().controlSize(.small)
-                    Text("Finishing…")
-                    Spacer()
-                } else {
-                    Text(AppDelegate.duration(recorder.elapsed)).font(.system(.title3, design: .monospaced))
-                    Spacer()
-                    Button(recorder.state == .paused ? "Resume" : "Pause", systemImage: recorder.state == .paused ? "play.fill" : "pause.fill", action: onPause)
-                    Button("Stop", systemImage: "stop.fill", action: onStop).buttonStyle(.borderedProminent)
+        HStack(spacing: 2) {
+            if saving || recorder.state == .stopping {
+                ProgressView().controlSize(.small).padding(.leading, 8)
+                Text("Saving").font(.system(size: 13, weight: .medium)).foregroundStyle(.secondary).padding(.horizontal, 8)
+            } else if recorder.state == .preparing || recorder.state == .idle {
+                status(recorder.countdownRemaining > 0 ? "\(recorder.countdownRemaining)" : nil)
+                tool("xmark", help: "Cancel", action: onCancel)
+            } else {
+                status(AppDelegate.duration(recorder.elapsed))
+                if showsMicrophone { microphone }
+                BarDivider()
+                tool(recorder.state == .paused ? "play.fill" : "pause.fill", help: recorder.state == .paused ? "Resume" : "Pause", action: onPause)
+                tool("arrow.counterclockwise", help: "Restart", action: onRestart)
+                tool("trash", help: "Delete", action: onDelete)
+                Button(action: onStop) {
+                    RoundedRectangle(cornerRadius: 2.5, style: .continuous).fill(.white).frame(width: 10, height: 10)
+                        .frame(width: 28, height: 28)
+                        .background(Circle().fill(Color.red))
                 }
+                .buttonStyle(.plain)
+                .help("Stop")
+                .accessibilityLabel("Stop")
+                .padding(.leading, 4)
             }
-            if recorder.microphoneLevel > 0 {
-                ProgressView(value: recorder.microphoneLevel).tint(.green).accessibilityLabel("Microphone level")
+        }
+        .padding(.horizontal, 6)
+        .frame(height: 40)
+        .background(.regularMaterial, in: Capsule())
+        .overlay(Capsule().strokeBorder(Color.primary.opacity(0.1)))
+        .shadow(color: .black.opacity(0.18), radius: 10, y: 3)
+        .fixedSize()
+        .padding(16)
+        .onAppear { pulse = !reduceMotion }
+    }
+
+    private func status(_ text: String?) -> some View {
+        HStack(spacing: 7) {
+            Circle()
+                .fill(recorder.state == .paused ? Color.secondary : Color.red)
+                .frame(width: 8, height: 8)
+                .opacity(recorder.state == .recording && pulse ? 0.35 : 1)
+                .animation(recorder.state == .recording && pulse ? .easeInOut(duration: 0.9).repeatForever() : .default, value: pulse)
+            if let text {
+                Text(text)
+                    .font(.system(size: 13, weight: .semibold).monospacedDigit())
+                    .foregroundStyle(recorder.state == .paused ? Color.secondary : Color.primary)
+                    .contentTransition(.numericText())
+            } else {
+                ProgressView().controlSize(.mini)
             }
-        }.padding(16).frame(minWidth: 350, minHeight: 70)
+        }
+        .padding(.leading, 8)
+        .padding(.trailing, 6)
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel(recorder.state == .paused ? "Paused" : "Recording")
+        .accessibilityValue(text ?? "")
+    }
+
+    private var microphone: some View {
+        HStack(spacing: 3) {
+            Image(systemName: "mic.fill").font(.system(size: 11, weight: .medium)).foregroundStyle(.secondary)
+            ZStack(alignment: .bottom) {
+                Capsule().fill(Color.primary.opacity(0.14))
+                Capsule().fill(Color.green).frame(height: max(2, 14 * min(1, recorder.microphoneLevel)))
+            }
+            .frame(width: 3, height: 14)
+        }
+        .padding(.trailing, 4)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("Microphone level")
+        .accessibilityValue("\(Int(recorder.microphoneLevel * 100)) percent")
+    }
+
+    private func tool(_ symbol: String, help: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) { Image(systemName: symbol) }
+            .buttonStyle(ToolButtonStyle())
+            .help(help)
+            .accessibilityLabel(help)
     }
 }
