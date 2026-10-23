@@ -96,7 +96,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 let recovered = try await RecordingController.recoverInterruptedRecordings()
                 for url in recovered { importRecording(url, openEditor: false) }
             } catch { library.error = error.localizedDescription }
-            if !UserDefaults.standard.bool(forKey: "onboarded") || !CGPreflightScreenCaptureAccess() { showOnboarding() }
+            // a relaunch after granting access returns to the welcome window to confirm it
+            let defaults = UserDefaults.standard
+            if !defaults.bool(forKey: "onboarded") || !CGPreflightScreenCaptureAccess() || defaults.bool(forKey: "screenAccessRequested") { showOnboarding() }
             else if !launchInBackground { showHome() }
         }
     }
@@ -643,6 +645,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 relaunch: { [weak self] in self?.relaunch() },
                 finish: { [weak self] in
                     UserDefaults.standard.set(true, forKey: "onboarded")
+                    UserDefaults.standard.set(false, forKey: "screenAccessRequested")
                     self?.onboardingWindow?.close()
                     self?.onboardingWindow = nil
                 }))
