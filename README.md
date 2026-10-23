@@ -67,3 +67,13 @@ clipt://history
 ```
 
 Automation is disabled by default. These commands do not upload files or accept remote output paths.
+
+## Contributing
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for development, testing, and pull-request guidance.
+
+## License
+
+Copyright © 2026 Ammaar Alam and contributors.
+
+Clipt is licensed under the [GNU General Public License version 3](LICENSE), **GPL-3.0-only**. The app bundle includes the license text. Distributed builds must be accompanied by the corresponding source under the license terms.
