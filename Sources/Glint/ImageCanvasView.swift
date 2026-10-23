@@ -17,10 +17,12 @@ final class ImageCanvasView: NSView {
     private var editingAnnotation: ImageAnnotation?
     // stays fitted to the window until the user zooms
     private var fitsWindow = true
+    private var lastFittedSize = CGSize.zero
     private var observers: [NSObjectProtocol] = []
 
     private enum DragOperation {
-        case draw(UUID), move, resize(Int, CGRect), marquee, crop, pan
+        // crop handles are 0 to 3 for corners, 4 to 7 for edges, -1 moves the frame, 8 draws a new one
+        case draw(UUID), move, resize(Int, CGRect), marquee, crop(Int, CGRect), pan
     }
 
     init(model: ImageEditorModel) {
@@ -44,14 +46,18 @@ final class ImageCanvasView: NSView {
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
     private var zoom: CGFloat { enclosingScrollView?.magnification ?? 1 }
     var magnification: CGFloat { zoom }
-    private var canvasRect: CGRect { CGRect(origin: CGPoint(x: 40, y: 40), size: model.document?.canvasSize ?? .zero) }
+    private var canvasRect: CGRect { CGRect(origin: CGPoint(x: 40, y: 40), size: model.displayDocument?.canvasSize ?? .zero) }
 
     func updateCanvasSize() {
-        guard let document = model.document else { return }
+        guard let document = model.displayDocument else { return }
         let newSize = CGSize(width: document.canvasSize.width + 80, height: document.canvasSize.height + 80)
-        if frame.size != newSize { setFrameSize(newSize) }
-        // refitting on every tick of a padding slider makes the canvas jump
-        if fitsWindow, window != nil, !model.isAdjusting { fitToWindow() }
+        let resized = frame.size != newSize
+        if resized { setFrameSize(newSize) }
+        // refit only when the canvas grew or shrank, and never mid slider drag
+        if resized || frame.size != lastFittedSize, fitsWindow, window != nil, !model.isAdjusting {
+            lastFittedSize = frame.size
+            fitToWindow()
+        }
         needsDisplay = true
     }
 
@@ -81,7 +87,7 @@ final class ImageCanvasView: NSView {
     }
 
     private func updateCanvasSizeWithoutFitting() {
-        guard let document = model.document else { return }
+        guard let document = model.displayDocument else { return }
         setFrameSize(CGSize(width: document.canvasSize.width + 80, height: document.canvasSize.height + 80))
     }
 
@@ -113,7 +119,7 @@ final class ImageCanvasView: NSView {
     override func draw(_ dirtyRect: NSRect) {
         NSColor.backdrop.setFill()
         dirtyRect.fill()
-        guard let document = model.document, let context = NSGraphicsContext.current?.cgContext else { return }
+        guard let document = model.displayDocument, let context = NSGraphicsContext.current?.cgContext else { return }
         let imageRect = canvasRect
         context.saveGState()
         context.setShadow(offset: CGSize(width: 0, height: -3 / zoom), blur: 24 / zoom, color: CGColor(gray: 0, alpha: 0.28))
@@ -141,7 +147,8 @@ final class ImageCanvasView: NSView {
         if let preview = model.preview { ImageRenderer.drawImage(preview, in: imageRect, context: context) }
         context.restoreGState()
 
-        if let bounds = model.selectionBounds, textEditor == nil {
+        if let draft = model.cropDraft { drawCrop(draft, document: document, imageRect: imageRect, context: context) }
+        if let bounds = model.selectionBounds, textEditor == nil, model.cropDraft == nil {
             let points = corners(of: bounds).map { canvasPoint($0, document: document) }
             context.saveGState()
             context.setStrokeColor(NSColor.glint.cgColor)
@@ -161,15 +168,9 @@ final class ImageCanvasView: NSView {
         }
         if let operation = dragOperation {
             switch operation {
-            case .crop, .marquee:
+            case .marquee:
                 let selection = rectBetween(startPoint, currentPoint).applying(document.originalToCanvas).offsetBy(dx: 40, dy: 40)
                 context.saveGState()
-                if case .crop = operation {
-                    context.setFillColor(CGColor(gray: 0, alpha: 0.45))
-                    context.addRect(imageRect)
-                    context.addRect(selection)
-                    context.fillPath(using: .evenOdd)
-                }
                 context.setStrokeColor(NSColor.glint.cgColor)
                 context.setLineWidth(1.5 / zoom)
                 context.setLineDash(phase: 0, lengths: [6 / zoom, 4 / zoom])
@@ -194,6 +195,95 @@ final class ImageCanvasView: NSView {
         return CGPoint(x: mapped.x + 40, y: mapped.y + 40)
     }
 
+    private func cropHandles(_ rect: CGRect) -> [CGPoint] {
+        corners(of: rect) + [CGPoint(x: rect.midX, y: rect.minY), CGPoint(x: rect.maxX, y: rect.midY),
+                             CGPoint(x: rect.midX, y: rect.maxY), CGPoint(x: rect.minX, y: rect.midY)]
+    }
+
+    // a dragged crop edge, corner or frame, kept inside the image and to the chosen ratio
+    private func cropRect(handle: Int, start: CGRect, bounds: CGRect, square: Bool) -> CGRect {
+        let dx = currentPoint.x - startPoint.x, dy = currentPoint.y - startPoint.y
+        if handle == -1 {
+            let x = min(max(start.minX + dx, bounds.minX), bounds.maxX - start.width)
+            let y = min(max(start.minY + dy, bounds.minY), bounds.maxY - start.height)
+            return CGRect(origin: CGPoint(x: x, y: y), size: start.size)
+        }
+        let chosen = square ? 1 : model.cropAspectRatio
+        let ratio = chosen > 0 ? (model.document?.quarterTurns ?? 0) % 2 == 0 ? chosen : 1 / chosen : nil
+        var minX = start.minX, maxX = start.maxX, minY = start.minY, maxY = start.maxY
+        switch handle {
+        case 0: minX += dx; minY += dy
+        case 1: maxX += dx; minY += dy
+        case 2: maxX += dx; maxY += dy
+        case 3: minX += dx; maxY += dy
+        case 4: minY += dy
+        case 5: maxX += dx
+        case 6: maxY += dy
+        case 7: minX += dx
+        default:
+            // a new frame grows away from where the drag began
+            return Self.fitCrop(rectBetween(startPoint, currentPoint), anchor: CGPoint(x: currentPoint.x < startPoint.x ? 1 : 0, y: currentPoint.y < startPoint.y ? 1 : 0),
+                           ratio: ratio, widthLeads: true, bounds: bounds)
+        }
+        let rect = CGRect(x: min(minX, maxX), y: min(minY, maxY), width: max(8, abs(maxX - minX)), height: max(8, abs(maxY - minY)))
+        // the side opposite the dragged handle stays put, edges keep the other axis centered
+        let fx: CGFloat = [0, 3, 7].contains(handle) ? (minX < maxX ? 1 : 0) : [1, 2, 5].contains(handle) ? (maxX > minX ? 0 : 1) : 0.5
+        let fy: CGFloat = [0, 1, 4].contains(handle) ? (minY < maxY ? 1 : 0) : [2, 3, 6].contains(handle) ? (maxY > minY ? 0 : 1) : 0.5
+        return Self.fitCrop(rect, anchor: CGPoint(x: fx, y: fy), ratio: ratio, widthLeads: ![4, 6].contains(handle), bounds: bounds)
+    }
+
+    // applies the ratio around a fixed point, then shrinks both sides together until it fits the image
+    static func fitCrop(_ rect: CGRect, anchor: CGPoint, ratio: Double?, widthLeads: Bool, bounds: CGRect) -> CGRect {
+        let point = CGPoint(x: rect.minX + anchor.x * rect.width, y: rect.minY + anchor.y * rect.height)
+        var size = rect.size
+        if let ratio { if widthLeads { size.height = size.width / ratio } else { size.width = size.height * ratio } }
+        var scale: CGFloat = 1
+        if anchor.x > 0 { scale = min(scale, (point.x - bounds.minX) / (anchor.x * size.width)) }
+        if anchor.x < 1 { scale = min(scale, (bounds.maxX - point.x) / ((1 - anchor.x) * size.width)) }
+        if anchor.y > 0 { scale = min(scale, (point.y - bounds.minY) / (anchor.y * size.height)) }
+        if anchor.y < 1 { scale = min(scale, (bounds.maxY - point.y) / ((1 - anchor.y) * size.height)) }
+        size = CGSize(width: size.width * max(0, scale), height: size.height * max(0, scale))
+        return CGRect(x: point.x - anchor.x * size.width, y: point.y - anchor.y * size.height, width: size.width, height: size.height).intersection(bounds)
+    }
+
+    // the dimmed outside, a thin frame with thirds and bold handles
+    private func drawCrop(_ draft: CGRect, document: ImageDocument, imageRect: CGRect, context: CGContext) {
+        let frame = draft.applying(document.originalToCanvas).offsetBy(dx: 40, dy: 40)
+        context.saveGState()
+        context.setFillColor(CGColor(gray: 0, alpha: 0.5))
+        context.addRect(imageRect)
+        context.addRect(frame)
+        context.fillPath(using: .evenOdd)
+        context.setStrokeColor(CGColor(gray: 1, alpha: 0.4))
+        context.setLineWidth(1 / zoom)
+        for third in [1.0 / 3, 2.0 / 3] {
+            context.move(to: CGPoint(x: frame.minX + frame.width * third, y: frame.minY))
+            context.addLine(to: CGPoint(x: frame.minX + frame.width * third, y: frame.maxY))
+            context.move(to: CGPoint(x: frame.minX, y: frame.minY + frame.height * third))
+            context.addLine(to: CGPoint(x: frame.maxX, y: frame.minY + frame.height * third))
+        }
+        context.strokePath()
+        context.setStrokeColor(.white)
+        context.setLineWidth(1.5 / zoom)
+        context.stroke(frame)
+        let arm = min(22 / zoom, frame.width / 3, frame.height / 3), weight = 4 / zoom
+        context.setLineWidth(weight)
+        context.setLineCap(.round)
+        for (corner, sx, sy) in [(CGPoint(x: frame.minX, y: frame.minY), 1.0, 1.0), (CGPoint(x: frame.maxX, y: frame.minY), -1.0, 1.0),
+                                 (CGPoint(x: frame.maxX, y: frame.maxY), -1.0, -1.0), (CGPoint(x: frame.minX, y: frame.maxY), 1.0, -1.0)] {
+            context.move(to: CGPoint(x: corner.x + sx * arm, y: corner.y))
+            context.addLine(to: corner)
+            context.addLine(to: CGPoint(x: corner.x, y: corner.y + sy * arm))
+        }
+        for (center, horizontal) in [(CGPoint(x: frame.midX, y: frame.minY), true), (CGPoint(x: frame.midX, y: frame.maxY), true),
+                                     (CGPoint(x: frame.minX, y: frame.midY), false), (CGPoint(x: frame.maxX, y: frame.midY), false)] {
+            context.move(to: horizontal ? CGPoint(x: center.x - arm / 2, y: center.y) : CGPoint(x: center.x, y: center.y - arm / 2))
+            context.addLine(to: horizontal ? CGPoint(x: center.x + arm / 2, y: center.y) : CGPoint(x: center.x, y: center.y + arm / 2))
+        }
+        context.strokePath()
+        context.restoreGState()
+    }
+
     private func corners(of rect: CGRect) -> [CGPoint] {
         [CGPoint(x: rect.minX, y: rect.minY), CGPoint(x: rect.maxX, y: rect.minY),
          CGPoint(x: rect.maxX, y: rect.maxY), CGPoint(x: rect.minX, y: rect.maxY)]
@@ -213,6 +303,16 @@ final class ImageCanvasView: NSView {
         lastWindowPoint = event.locationInWindow
         gestureSnapshot = document
         if spacePressed { dragOperation = .pan; NSCursor.closedHand.set(); return }
+        if let draft = model.cropDraft, let shown = model.displayDocument {
+            let point = originalPoint(event, document: shown)
+            startPoint = point
+            currentPoint = point
+            let reach = 12 / zoom
+            if let handle = cropHandles(draft).firstIndex(where: { hypot($0.x - point.x, $0.y - point.y) < reach }) {
+                dragOperation = .crop(handle, draft)
+            } else { dragOperation = .crop(draft.contains(point) ? -1 : 8, draft) }
+            return
+        }
 
         if model.tool == .select {
             if let selection = model.selectionBounds,
@@ -247,7 +347,6 @@ final class ImageCanvasView: NSView {
             return
         }
         model.selectedIDs = []
-        if model.tool == .crop { dragOperation = .crop; return }
         if model.tool == .image { model.importImage(); return }
         if model.tool == .text { beginText(nil, at: point); return }
         var annotation = model.newAnnotation(tool: model.tool, at: point)
@@ -258,7 +357,7 @@ final class ImageCanvasView: NSView {
             model.selectedIDs = [annotation.id]
             return
         }
-        if [.pen, .arrow, .curvedArrow, .line].contains(model.tool) { annotation.points = [point, point] }
+        if [.pen, .arrow, .doubleArrow, .curvedArrow, .line].contains(model.tool) { annotation.points = [point, point] }
         var next = document
         next.annotations.append(annotation)
         model.updateGesture(next)
@@ -286,7 +385,7 @@ final class ImageCanvasView: NSView {
                 if hypot(end.x - last.x, end.y - last.y) > 0.5 && next.annotations[index].points.count < 100_000 {
                     next.annotations[index].points.append(end)
                 }
-            } else if [.arrow, .curvedArrow, .line].contains(tool) {
+            } else if [.arrow, .doubleArrow, .curvedArrow, .line].contains(tool) {
                 if shift {
                     let distance = hypot(end.x - startPoint.x, end.y - startPoint.y)
                     let angle = (atan2(end.y - startPoint.y, end.x - startPoint.x) / (.pi / 4)).rounded() * (.pi / 4)
@@ -328,13 +427,10 @@ final class ImageCanvasView: NSView {
                 next.annotations[index].resize(from: bounds, to: newBounds)
             }
             model.updateGesture(next)
-        case .crop:
-            let chosenRatio = shift ? 1 : model.cropAspectRatio
-            if chosenRatio > 0 {
-                let ratio = snapshot.quarterTurns % 2 == 0 ? chosenRatio : 1 / chosenRatio
-                let width = abs(currentPoint.x - startPoint.x)
-                currentPoint.y = startPoint.y + (currentPoint.y >= startPoint.y ? width / ratio : -width / ratio)
-            }
+        case .crop(let handle, let start):
+            guard let shown = model.displayDocument else { return }
+            currentPoint = originalPoint(event, document: shown)
+            model.setCropDraft(cropRect(handle: handle, start: start, bounds: ImageEditorModel.cropBounds(shown), square: shift))
             needsDisplay = true
         case .marquee: needsDisplay = true
         }
@@ -355,13 +451,7 @@ final class ImageCanvasView: NSView {
             }
         case .move: model.finishGesture(from: snapshot, action: "Move")
         case .resize: model.finishGesture(from: snapshot, action: "Resize")
-        case .crop:
-            let rect = rectBetween(startPoint, currentPoint).intersection(snapshot.cropRect).integral.intersection(snapshot.cropRect)
-            if !rect.isNull, rect.width >= 2, rect.height >= 2 {
-                model.mutate("Crop") { $0.cropRect = rect }
-                model.tool = .select
-                fitToWindow()
-            }
+        case .crop: break
         case .marquee:
             let rect = rectBetween(startPoint, currentPoint)
             model.selectedIDs.formUnion(snapshot.annotations.filter { rect.intersects($0.bounds) }.map(\.id))
@@ -380,14 +470,21 @@ final class ImageCanvasView: NSView {
         }
         editingAnnotation = annotation
         let frame = annotation.rect.applying(document.originalToCanvas).offsetBy(dx: 40, dy: 40)
+        // typing happens in place over the image, outlined but not boxed in white
         let scroll = NSScrollView(frame: frame)
-        scroll.borderType = .lineBorder
-        scroll.hasVerticalScroller = true
+        scroll.borderType = .noBorder
+        scroll.drawsBackground = false
+        scroll.hasVerticalScroller = false
+        scroll.wantsLayer = true
+        scroll.layer?.borderWidth = 1
+        scroll.layer?.borderColor = NSColor.glint.cgColor
+        scroll.layer?.cornerRadius = 4
         let text = AnnotationTextView(frame: CGRect(origin: .zero, size: frame.size))
         text.isRichText = false
         text.font = NSFont.systemFont(ofSize: annotation.fontSize, weight: annotation.bold ? .bold : .regular)
         text.textColor = annotation.color.nsColor
-        text.backgroundColor = NSColor.textBackgroundColor.withAlphaComponent(0.92)
+        text.drawsBackground = false
+        text.insertionPointColor = annotation.color.nsColor
         text.string = annotation.text
         text.textContainerInset = CGSize(width: 4, height: 4)
         text.autoresizingMask = [.width]
@@ -422,7 +519,11 @@ final class ImageCanvasView: NSView {
         window?.makeFirstResponder(self)
     }
 
-    func commitEditing() { finishText(cancelled: false) }
+    func commitEditing() {
+        finishText(cancelled: false)
+        // a pending crop counts once the image leaves the editor
+        if model.tool == .crop { model.tool = .select }
+    }
 
     override func keyDown(with event: NSEvent) {
         let command = event.modifierFlags.contains(.command)
@@ -443,6 +544,10 @@ final class ImageCanvasView: NSView {
             case "1": actualSize()
             default: super.keyDown(with: event)
             }
+            return
+        }
+        if model.cropDraft != nil, [36, 76, 53].contains(event.keyCode) {
+            if event.keyCode == 53 { model.cancelCrop() } else { model.tool = .select }
             return
         }
         switch event.keyCode {

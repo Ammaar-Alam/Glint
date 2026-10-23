@@ -27,7 +27,7 @@ final class ImageEditorWindowController: NSWindowController, NSWindowDelegate, E
         window.tabbingMode = .disallowed
         super.init(window: window)
         window.delegate = self
-        window.contentViewController = NSHostingController(rootView: ImageEditorView(model: model, actions: EditorActions(
+        window.contentView = StaticHostingView(rootView: ImageEditorView(model: model, actions: EditorActions(
             export: { [weak self] in self?.exportImage() }, saveProject: { [weak self] in self?.saveProject() },
             printImage: { [weak self] in self?.printImage() }, pin: { [weak self] in self?.pinImage() },
             capture: { [weak self] in self?.captureImage() }, done: { [weak self] in self?.finishEditing() },
@@ -284,15 +284,30 @@ extension AnnotationColor {
 }
 
 private enum EditorTools {
-    static let color: Set<AnnotationTool> = [.arrow, .curvedArrow, .line, .rectangle, .ellipse, .pen, .text, .counter, .highlight, .redact]
-    static let stroke: Set<AnnotationTool> = [.arrow, .curvedArrow, .line, .rectangle, .ellipse, .pen]
-    static let redact: Set<AnnotationTool> = [.blur, .pixelate, .redact]
-    static let arrows: Set<AnnotationTool> = [.arrow, .curvedArrow]
-    // tools without their own strip button share one with a remembered variant
-    static let strip: [AnnotationTool] = [.select, .arrow, .rectangle, .ellipse, .line, .pen, .text, .counter, .highlight, .spotlight, .pixelate]
+    static let color: Set<AnnotationTool> = [.arrow, .doubleArrow, .curvedArrow, .line, .rectangle, .ellipse, .pen, .text, .counter, .highlight, .redact]
+    // tools that share one strip button, the button keeps the last variant used
+    static let families: [AnnotationTool: [AnnotationTool]] = [
+        .arrow: [.arrow, .curvedArrow, .doubleArrow, .line], .rectangle: [.rectangle, .ellipse], .pixelate: [.blur, .pixelate, .redact]
+    ]
+    static let memory: [AnnotationTool: String] = [.arrow: "arrowTool", .rectangle: "shapeTool", .pixelate: "redactTool"]
+    static let strip: [AnnotationTool] = [.select, .arrow, .rectangle, .pen, .text, .counter, .highlight, .spotlight, .pixelate]
+    static let withOptions: Set<AnnotationTool> = [.arrow, .rectangle, .pen, .text, .counter, .highlight, .pixelate]
 
-    @MainActor static func active(_ model: ImageEditorModel) -> Set<AnnotationTool> {
-        model.selectedIDs.isEmpty ? [model.tool] : Set(model.selectedAnnotations.map(\.tool))
+    static func members(_ key: AnnotationTool) -> [AnnotationTool] { families[key] ?? [key] }
+
+    static func family(of tool: AnnotationTool) -> AnnotationTool { families.first { $0.value.contains(tool) }?.key ?? tool }
+
+    static func remembered(_ key: AnnotationTool) -> AnnotationTool {
+        memory[key].flatMap { UserDefaults.standard.string(forKey: $0) }.flatMap(AnnotationTool.init(rawValue:)) ?? key
+    }
+
+    static func remember(_ tool: AnnotationTool) {
+        if let key = memory[family(of: tool)] { UserDefaults.standard.set(tool.rawValue, forKey: key) }
+    }
+
+    static func symbol(_ key: AnnotationTool, active: AnnotationTool) -> String {
+        if key == .pixelate { return "checkerboard.rectangle" }
+        return members(key).contains(active) ? active.symbol : remembered(key).symbol
     }
 }
 
@@ -300,8 +315,7 @@ private struct ImageEditorView: View {
     @ObservedObject var model: ImageEditorModel
     let actions: EditorActions
     @State private var sizePopover: ImageSizePopover?
-    @AppStorage("redactTool") private var redactTool = AnnotationTool.pixelate.rawValue
-    @AppStorage("arrowTool") private var arrowTool = AnnotationTool.arrow.rawValue
+    @State private var openOptions: AnnotationTool?
     @Namespace private var toolSelection
 
     var body: some View {
@@ -314,6 +328,9 @@ private struct ImageEditorView: View {
                     if model.document == nil, model.errorMessage == nil { ProgressView().controlSize(.large) }
                 }
                 .overlay(alignment: .leading) { ColorColumn(model: model).padding(.leading, 14) }
+                .overlay(alignment: .top) {
+                    if model.cropDraft != nil { cropBar.padding(.top, 14).transition(.opacity.combined(with: .offset(y: -8))) }
+                }
                 if model.showsBackgroundPanel {
                     Divider()
                     BackgroundPanel(model: model).frame(width: 280).transition(.move(edge: .trailing))
@@ -324,6 +341,7 @@ private struct ImageEditorView: View {
         }
         .ignoresSafeArea(.container, edges: .top)
         .animation(.easeOut(duration: 0.18), value: model.showsBackgroundPanel)
+        .animation(.easeOut(duration: 0.18), value: model.cropDraft != nil)
         .alert("Couldn’t finish", isPresented: Binding(get: { model.errorMessage != nil }, set: { if !$0 { model.errorMessage = nil } })) {
             Button("OK") { model.errorMessage = nil }
         } message: { Text(model.errorMessage ?? "") }
@@ -343,7 +361,6 @@ private struct ImageEditorView: View {
             }
             Spacer(minLength: 8)
             toolStrip
-            InlineOptions(model: model)
             Spacer(minLength: 8)
             Button("Save As…", action: actions.export)
                 .buttonStyle(SecondaryButtonStyle())
@@ -354,7 +371,7 @@ private struct ImageEditorView: View {
         }
         .padding(.horizontal, 12)
         .frame(height: 52)
-        // only the empty bar moves the window, so sliders and menus keep their drags
+        // only the empty bar moves the window, so controls keep their drags
         .background { Rectangle().fill(.bar).gesture(WindowDragGesture()) }
         // menu items ignore keyboard shortcuts, so hidden buttons carry them
         .background(Group {
@@ -364,29 +381,35 @@ private struct ImageEditorView: View {
         .disabled(model.document == nil || model.busy)
     }
 
+    // the strip never changes shape, each tool's options open from the tool itself
     private var toolStrip: some View {
         HStack(spacing: 2) {
-            ForEach(EditorTools.strip) { tool in
-                let shared = tool == .pixelate ? EditorTools.redact : tool == .arrow ? EditorTools.arrows : [tool]
-                let selected = shared.contains(model.tool)
-                Button {
-                    switch tool {
-                    case .pixelate: select(AnnotationTool(rawValue: redactTool) ?? .pixelate)
-                    case .arrow: select(AnnotationTool(rawValue: arrowTool) ?? .arrow)
-                    default: select(tool)
+            ForEach(EditorTools.strip) { key in
+                let selected = EditorTools.members(key).contains(model.tool)
+                Button { tap(key) } label: { Image(systemName: EditorTools.symbol(key, active: model.tool)) }
+                    .buttonStyle(ToolButtonStyle(selected: selected, size: CGSize(width: 34, height: 30), prominent: true, drawsSelection: false))
+                    .overlay(alignment: .bottomTrailing) {
+                        if EditorTools.withOptions.contains(key) {
+                            Image(systemName: "arrowtriangle.down.fill")
+                                .font(.system(size: 5))
+                                .foregroundStyle(selected ? Color.white.opacity(0.85) : Color.secondary)
+                                .padding(3)
+                                .allowsHitTesting(false)
+                        }
                     }
-                } label: { Image(systemName: tool == .pixelate ? "checkerboard.rectangle" : tool.symbol) }
-                .buttonStyle(ToolButtonStyle(selected: selected, size: CGSize(width: 32, height: 30), prominent: true, drawsSelection: false))
-                .background {
-                    if selected {
-                        RoundedRectangle(cornerRadius: Radius.control, style: .continuous)
-                            .fill(Color.glint)
-                            .matchedGeometryEffect(id: "tool", in: toolSelection)
+                    .background {
+                        if selected {
+                            RoundedRectangle(cornerRadius: Radius.control, style: .continuous)
+                                .fill(Color.glint)
+                                .matchedGeometryEffect(id: "tool", in: toolSelection)
+                        }
                     }
-                }
-                .help(Self.help(tool))
-                .accessibilityLabel(tool == .pixelate ? "Redact" : tool.title)
-                .accessibilityAddTraits(selected ? .isSelected : [])
+                    .popover(isPresented: Binding(get: { openOptions == key }, set: { if !$0 { openOptions = nil } }), arrowEdge: .bottom) {
+                        ToolOptions(model: model, key: key)
+                    }
+                    .help(Self.help(key))
+                    .accessibilityLabel(key == .pixelate ? "Redact" : key.title)
+                    .accessibilityAddTraits(selected ? .isSelected : [])
             }
         }
         .padding(3)
@@ -395,15 +418,38 @@ private struct ImageEditorView: View {
         .fixedSize()
     }
 
-    private static func help(_ tool: AnnotationTool) -> String {
-        if tool == .pixelate { return "Redact: blur, pixelate or cover  B" }
-        return tool.title + (tool.keyboardKey.map { "  \($0.uppercased())" } ?? "")
+    // the first click picks the tool, a second click on it opens its options
+    private func tap(_ key: AnnotationTool) {
+        if EditorTools.members(key).contains(model.tool) {
+            if EditorTools.withOptions.contains(key) { openOptions = openOptions == key ? nil : key }
+        } else {
+            openOptions = nil
+            select(EditorTools.remembered(key))
+        }
+    }
+
+    private static func help(_ key: AnnotationTool) -> String {
+        let name = key == .pixelate ? "Redact" : key == .rectangle ? "Shapes" : key == .arrow ? "Arrows" : key.title
+        let shortcut = key.keyboardKey.map { "  \($0.uppercased())" } ?? ""
+        return name + shortcut + (EditorTools.withOptions.contains(key) ? " · click again for options" : "")
     }
 
     private func select(_ tool: AnnotationTool) {
         if tool == .crop { model.select(nil) }
         model.tool = tool
         model.canvas?.window?.makeFirstResponder(model.canvas)
+    }
+
+    private static let cropRatios: [(String, Double)] = [("Free", 0), ("Square", 1), ("16:9", 16.0 / 9), ("9:16", 9.0 / 16), ("4:3", 4.0 / 3), ("3:2", 3.0 / 2)]
+
+    private var cropBar: some View {
+        Island {
+            FlatPicker(selection: $model.cropAspectRatio, options: Self.cropRatios)
+            Button("Reset") { model.resetCrop() }.buttonStyle(ToolButtonStyle(size: CGSize(width: 54, height: 28))).font(.system(size: 12, weight: .medium))
+            BarDivider()
+            Button("Cancel") { model.cancelCrop() }.buttonStyle(SecondaryButtonStyle())
+            Button("Apply") { select(.select) }.buttonStyle(PrimaryButtonStyle())
+        }
     }
 
     private var bottomBar: some View {
@@ -487,121 +533,116 @@ private struct ImageEditorView: View {
     }
 }
 
-// controls for the active tool, sitting right of the tool strip
-private struct InlineOptions: View {
+// a tool's own options in a popover, applied to the selection as well
+private struct ToolOptions: View {
     @ObservedObject var model: ImageEditorModel
-
-    private static let cropRatios: [(title: String, ratio: Double)] = [("Free", 0), ("1:1", 1), ("16:9", 16.0 / 9), ("9:16", 9.0 / 16), ("4:3", 4.0 / 3), ("3:2", 3.0 / 2)]
-    private static let redactModes: [(tool: AnnotationTool, title: String)] = [(.blur, "Blur"), (.pixelate, "Pixelate"), (.redact, "Solid")]
+    let key: AnnotationTool
 
     var body: some View {
-        let tools = EditorTools.active(model)
-        HStack(spacing: 6) {
-            if model.tool == .crop {
-                cropOptions
-            } else {
-                if model.selectedIDs.isEmpty && EditorTools.arrows.contains(model.tool) { arrowStyle }
-                if model.selectedIDs.isEmpty && EditorTools.redact.contains(model.tool) { redactMode }
-                if !tools.isDisjoint(with: EditorTools.stroke) { slider(help: "Size") }
-                if !tools.isDisjoint(with: [.blur, .pixelate]) { slider(help: "Strength") }
-                if !tools.isDisjoint(with: [.rectangle, .ellipse]) {
-                    Button("Fill") { setFilled(!model.filled) }
-                        .buttonStyle(ToolButtonStyle(selected: model.filled, size: CGSize(width: 40, height: 28)))
-                        .font(.system(size: 12, weight: .medium))
+        VStack(alignment: .leading, spacing: 14) {
+            if let variants = EditorTools.families[key] {
+                HStack(spacing: 4) {
+                    ForEach(variants) { variant in
+                        Button { choose(variant) } label: {
+                            VStack(spacing: 5) {
+                                Image(systemName: variant == .redact ? "rectangle.fill" : variant.symbol).font(.system(size: 15, weight: .medium))
+                                Text(Self.label(variant)).font(.system(size: 10, weight: .medium))
+                            }
+                        }
+                        .buttonStyle(ToolButtonStyle(selected: model.tool == variant, size: CGSize(width: 58, height: 48)))
+                    }
                 }
-                if !tools.isDisjoint(with: [.text, .counter]) { sizeStepper }
-                if tools.contains(.text) {
+            }
+            switch key {
+            case .arrow, .rectangle, .pen:
+                slider("Thickness", in: 1...40)
+                if key == .rectangle { toggle("Fill", isOn: model.filled) { setFilled($0) } }
+            case .pixelate:
+                if model.tool == .redact { Text("Covers with the color on the left").font(.system(size: 12)).foregroundStyle(.secondary) }
+                else { slider("Strength", in: 2...40) }
+            case .text:
+                stepper
+                HStack(spacing: 6) {
                     Button { model.bold.toggle(); let value = model.bold; model.changeStyle { $0.bold = value } } label: { Image(systemName: "bold") }
                         .buttonStyle(ToolButtonStyle(selected: model.bold)).help("Bold")
                     Button { model.italic.toggle(); let value = model.italic; model.changeStyle { $0.italic = value } } label: { Image(systemName: "italic") }
                         .buttonStyle(ToolButtonStyle(selected: model.italic)).help("Italic")
                 }
-                if model.tool == .highlight && model.selectedIDs.isEmpty {
-                    Button { model.smartHighlight.toggle() } label: { Image(systemName: "text.alignleft") }
-                        .buttonStyle(ToolButtonStyle(selected: model.smartHighlight)).help("Snap to Text")
-                }
-                if !model.selectedIDs.isEmpty {
-                    Button { model.duplicateSelection() } label: { Image(systemName: "plus.square.on.square") }
-                        .buttonStyle(ToolButtonStyle()).help("Duplicate")
-                    Button { model.deleteSelection() } label: { Image(systemName: "trash") }
-                        .buttonStyle(ToolButtonStyle()).help("Delete")
-                }
+            case .counter: stepper
+            case .highlight: toggle("Snap to text", isOn: model.smartHighlight) { model.smartHighlight = $0 }
+            default: EmptyView()
             }
         }
-        .fixedSize()
+        .padding(14)
+        .frame(width: 252, alignment: .leading)
     }
 
-    private var arrowStyle: some View {
-        HStack(spacing: 0) {
-            ForEach([AnnotationTool.arrow, .curvedArrow]) { tool in
-                Button { model.tool = tool; UserDefaults.standard.set(tool.rawValue, forKey: "arrowTool") } label: { Image(systemName: tool.symbol) }
-                    .buttonStyle(ToolButtonStyle(selected: model.tool == tool, size: CGSize(width: 28, height: 26)))
-                    .help(tool.title)
-            }
-        }
-        .padding(2)
-        .background(Color.primary.opacity(0.06), in: RoundedRectangle(cornerRadius: Radius.control + 2, style: .continuous))
-    }
-
-    private var redactMode: some View {
-        Segmented {
-            ForEach(Self.redactModes, id: \.tool) { mode in
-                Button(mode.title) {
-                    model.tool = mode.tool
-                    UserDefaults.standard.set(mode.tool.rawValue, forKey: "redactTool")
-                }
-                .buttonStyle(ToolButtonStyle(selected: model.tool == mode.tool, size: CGSize(width: 64, height: 24)))
-                .font(.system(size: 12, weight: .medium))
-            }
+    private static func label(_ tool: AnnotationTool) -> String {
+        switch tool {
+        case .arrow: return "Arrow"
+        case .curvedArrow: return "Curved"
+        case .doubleArrow: return "Double"
+        case .line: return "Line"
+        case .rectangle: return "Box"
+        case .ellipse: return "Oval"
+        case .blur: return "Blur"
+        case .pixelate: return "Pixelate"
+        case .redact: return "Solid"
+        default: return tool.title
         }
     }
 
-    // line width doubles as blur and pixel strength
-    private func slider(help: String) -> some View {
-        HStack(spacing: 8) {
-            Text(help).font(.system(size: 12, weight: .medium)).foregroundStyle(.secondary)
-            Slider(value: Binding(get: { model.lineWidth }, set: { setLineWidth($0.rounded()) }), in: 1...40) { editing in
+    // switching a variant also converts selected marks of the same family
+    private func choose(_ variant: AnnotationTool) {
+        model.tool = variant
+        EditorTools.remember(variant)
+        let family = Set(EditorTools.members(key))
+        model.changeStyle { item in
+            guard family.contains(item.tool), item.tool != variant else { return }
+            if variant == .curvedArrow, item.points.count == 2, let start = item.points.first, let end = item.points.last {
+                item.points = [start, CGPoint(x: end.x, y: start.y), end]
+            } else if variant != .curvedArrow, item.points.count == 3, let start = item.points.first, let end = item.points.last {
+                item.points = [start, end]
+            }
+            item.tool = variant
+        }
+    }
+
+    private func slider(_ title: String, in range: ClosedRange<Double>) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack {
+                Text(title).font(.system(size: 12, weight: .medium))
+                Spacer()
+                Text("\(Int(model.lineWidth))").font(.system(size: 12).monospacedDigit()).foregroundStyle(.secondary)
+            }
+            Slider(value: Binding(get: { min(range.upperBound, max(range.lowerBound, model.lineWidth)) }, set: { setLineWidth($0.rounded()) }), in: range) { editing in
                 if editing { model.beginAdjusting() } else { model.endAdjusting() }
             }
-                .controlSize(.small)
-                .frame(width: 90)
-                .accessibilityLabel(help)
+            .controlSize(.small)
         }
-        .help(help)
     }
 
-    private var sizeStepper: some View {
-        HStack(spacing: 0) {
-            Button { setFontSize(model.fontSize - 2) } label: { Image(systemName: "minus") }
-                .buttonStyle(ToolButtonStyle(size: CGSize(width: 24, height: 26))).help("Smaller")
-            Text("\(Int(model.fontSize))").font(.system(size: 12, weight: .semibold).monospacedDigit()).frame(width: 26)
-            Button { setFontSize(model.fontSize + 2) } label: { Image(systemName: "plus") }
-                .buttonStyle(ToolButtonStyle(size: CGSize(width: 24, height: 26))).help("Larger")
+    private func toggle(_ title: String, isOn: Bool, set: @escaping (Bool) -> Void) -> some View {
+        HStack {
+            Text(title).font(.system(size: 12, weight: .medium))
+            Spacer()
+            Toggle(title, isOn: Binding(get: { isOn }, set: set)).labelsHidden().toggleStyle(FlatToggleStyle())
         }
-        .padding(2)
-        .background(Color.primary.opacity(0.06), in: RoundedRectangle(cornerRadius: Radius.control + 2, style: .continuous))
-        .help("Size")
     }
 
-    private var cropOptions: some View {
-        HStack(spacing: 6) {
-            Menu {
-                ForEach(Self.cropRatios, id: \.title) { item in
-                    Button(item.title) { model.cropAspectRatio = item.ratio }
-                }
-            } label: {
-                HStack(spacing: 4) {
-                    Text(Self.cropRatios.first { $0.ratio == model.cropAspectRatio }?.title ?? "Free").font(.system(size: 12, weight: .medium))
-                    Image(systemName: "chevron.down").font(.system(size: 9, weight: .bold)).foregroundStyle(.secondary)
-                }
+    private var stepper: some View {
+        HStack {
+            Text("Size").font(.system(size: 12, weight: .medium))
+            Spacer()
+            HStack(spacing: 0) {
+                Button { setFontSize(model.fontSize - 2) } label: { Image(systemName: "minus") }
+                    .buttonStyle(ToolButtonStyle(size: CGSize(width: 26, height: 26)))
+                Text("\(Int(model.fontSize))").font(.system(size: 12, weight: .semibold).monospacedDigit()).frame(width: 30)
+                Button { setFontSize(model.fontSize + 2) } label: { Image(systemName: "plus") }
+                    .buttonStyle(ToolButtonStyle(size: CGSize(width: 26, height: 26)))
             }
-            .menuStyle(.button)
-            .menuIndicator(.hidden)
-            .buttonStyle(ToolButtonStyle(size: CGSize(width: 66, height: 28)))
-            .fixedSize()
-            .help("Aspect Ratio")
-            Button { model.resetCrop() } label: { Image(systemName: "arrow.counterclockwise") }
-                .buttonStyle(ToolButtonStyle()).help("Reset Crop")
+            .padding(2)
+            .background(Color.primary.opacity(0.06), in: RoundedRectangle(cornerRadius: Radius.control + 2, style: .continuous))
         }
     }
 
@@ -624,19 +665,16 @@ private struct ColorColumn: View {
     @ObservedObject var model: ImageEditorModel
     @State private var expanded = false
 
-    // hue columns with a gray column, light to dark rows
-    private static let extended: [[AnnotationColor]] = [(0.95, 0.3), (0.95, 0.55), (0.92, 0.85), (0.72, 0.9), (0.45, 0.9)].map { brightness, saturation in
-        [0.0, 0.07, 0.13, 0.33, 0.5, 0.6, 0.75, 0.88].map { AnnotationColor(NSColor(hue: $0, saturation: saturation, brightness: brightness, alpha: 1)) }
-            + [AnnotationColor(red: brightness * 0.95, green: brightness * 0.95, blue: brightness * 0.97)]
+    private var active: Bool {
+        let tools: Set<AnnotationTool> = model.selectedIDs.isEmpty ? [model.tool] : Set(model.selectedAnnotations.map(\.tool))
+        return !tools.isDisjoint(with: EditorTools.color)
     }
-
-    private var active: Bool { !EditorTools.active(model).isDisjoint(with: EditorTools.color) }
 
     var body: some View {
         HStack(alignment: .center, spacing: 8) {
             VStack(spacing: 4) {
                 ForEach(Array(AnnotationColor.palette.enumerated()), id: \.offset) { index, color in
-                    swatch(color, size: 18)
+                    ColorDot(color: color.nsColor, selected: model.color == color, size: 18) { model.setColor(color) }
                         .help("\(AnnotationColor.paletteNames[index])  \(index + 1)")
                         .accessibilityLabel(AnnotationColor.paletteNames[index])
                 }
@@ -658,24 +696,13 @@ private struct ColorColumn: View {
             .overlay(RoundedRectangle(cornerRadius: Radius.card, style: .continuous).strokeBorder(Color.primary.opacity(0.08)))
             .shadow(color: .black.opacity(0.1), radius: 8, y: 2)
             if expanded {
-                VStack(alignment: .leading, spacing: 4) {
-                    ForEach(Array(Self.extended.enumerated()), id: \.offset) { _, row in
-                        HStack(spacing: 4) {
-                            ForEach(Array(row.enumerated()), id: \.offset) { _, color in swatch(color, size: 20) }
-                        }
-                    }
-                    Button("Custom…") { ColorPanelBridge.shared.open(model.color.nsColor) { model.setColor(AnnotationColor($0)) } }
-                        .buttonStyle(.plain)
-                        .font(.system(size: 12, weight: .medium))
-                        .foregroundStyle(Color.glint)
-                        .padding(.top, 4)
-                        .padding(.leading, 6)
-                }
-                .padding(10)
-                .background(.regularMaterial, in: RoundedRectangle(cornerRadius: Radius.card, style: .continuous))
-                .overlay(RoundedRectangle(cornerRadius: Radius.card, style: .continuous).strokeBorder(Color.primary.opacity(0.08)))
-                .shadow(color: .black.opacity(0.12), radius: 10, y: 3)
-                .transition(.asymmetric(insertion: .scale(scale: 0.92, anchor: .leading).combined(with: .opacity), removal: .opacity))
+                ColorPickerPanel(color: model.color.nsColor, onChange: { model.setColor(AnnotationColor($0)) },
+                                 onEditing: { editing in editing ? model.beginAdjusting() : model.endAdjusting() })
+                    .padding(12)
+                    .background(.regularMaterial, in: RoundedRectangle(cornerRadius: Radius.card, style: .continuous))
+                    .overlay(RoundedRectangle(cornerRadius: Radius.card, style: .continuous).strokeBorder(Color.primary.opacity(0.08)))
+                    .shadow(color: .black.opacity(0.12), radius: 10, y: 3)
+                    .transition(.asymmetric(insertion: .scale(scale: 0.92, anchor: .leading).combined(with: .opacity), removal: .opacity))
             }
         }
         .opacity(active ? 1 : 0.4)
@@ -683,52 +710,82 @@ private struct ColorColumn: View {
         .animation(.spring(response: 0.3, dampingFraction: 0.82), value: expanded)
         .animation(.easeOut(duration: 0.15), value: active)
     }
-
-    private func swatch(_ color: AnnotationColor, size: CGFloat) -> some View {
-        Button { model.setColor(color) } label: {
-            Circle()
-                .fill(Color(nsColor: color.nsColor))
-                .overlay(Circle().strokeBorder(Color.black.opacity(0.15), lineWidth: 0.5))
-                .frame(width: size, height: size)
-                .padding(3)
-                .overlay(Circle().strokeBorder(model.color == color ? Color.primary.opacity(0.85) : .clear, lineWidth: 1.5))
-                .scaleEffect(model.color == color ? 1.08 : 1)
-                .animation(.spring(response: 0.25, dampingFraction: 0.7), value: model.color == color)
-                .frame(width: size + 10, height: size + 8)
-                .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-    }
 }
 
-// drag the finished image straight into another app
+// drag the finished image into any app, rendered as the drag begins
 private struct DragHandle: View {
     let flatten: () async -> URL?
 
     var body: some View {
-        HStack(spacing: 8) {
-            Image(systemName: "line.3.horizontal").font(.system(size: 11, weight: .semibold)).foregroundStyle(.secondary)
-            Text("Drag").font(.system(size: 12, weight: .semibold))
-            Image(systemName: "line.3.horizontal").font(.system(size: 11, weight: .semibold)).foregroundStyle(.secondary)
+        HStack(spacing: 7) {
+            Image(systemName: "hand.point.up.left.fill").font(.system(size: 12, weight: .semibold)).foregroundStyle(Color.glint)
+            Text("Drag image").font(.system(size: 12, weight: .semibold))
         }
         .padding(.horizontal, 16)
         .frame(height: 28)
         .background(Capsule().fill(Color.primary.opacity(0.07)))
         .overlay(Capsule().strokeBorder(Color.primary.opacity(0.1)))
-        .contentShape(Capsule())
-        .help("Drag the image into any app")
-        .onDrag {
-            let provider = NSItemProvider()
-            provider.suggestedName = "Glint"
-            provider.registerFileRepresentation(forTypeIdentifier: UTType.png.identifier, fileOptions: [], visibility: .all) { completion in
-                Task { @MainActor in
-                    let url = await flatten()
-                    completion(url, false, url == nil ? GlintError.message("The image couldn’t be prepared.") : nil)
-                }
-                return nil
-            }
-            return provider
+        .overlay(DragSource(flatten: flatten))
+        .help("Drag into any app to share the image")
+    }
+}
+
+private struct DragSource: NSViewRepresentable {
+    let flatten: () async -> URL?
+    func makeNSView(context: Context) -> DragSourceView { DragSourceView(flatten: flatten) }
+    func updateNSView(_ view: DragSourceView, context: Context) { view.flatten = flatten }
+}
+
+@MainActor
+final class DragSourceView: NSView, NSDraggingSource {
+    var flatten: () async -> URL?
+    private var downEvent: NSEvent?
+    private var file: URL?
+    private var dragging = false
+    private var moved = false
+
+    init(flatten: @escaping () async -> URL?) {
+        self.flatten = flatten
+        super.init(frame: .zero)
+    }
+
+    required init?(coder: NSCoder) { nil }
+    override var mouseDownCanMoveWindow: Bool { false }
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+    override func resetCursorRects() { addCursorRect(bounds, cursor: .openHand) }
+
+    // the current edits render on press, the drag starts once the file exists and the pointer has moved
+    override func mouseDown(with event: NSEvent) {
+        downEvent = event
+        file = nil
+        moved = false
+        Task {
+            let url = await flatten()
+            guard downEvent === event else { return }
+            file = url
+            if moved { startDrag() }
         }
+    }
+
+    override func mouseDragged(with event: NSEvent) {
+        moved = true
+        startDrag()
+    }
+
+    private func startDrag() {
+        guard !dragging, let file, let downEvent else { return }
+        dragging = true
+        let item = NSDraggingItem(pasteboardWriter: file as NSURL)
+        item.setDraggingFrame(bounds, contents: NSImage(contentsOf: file))
+        beginDraggingSession(with: [item], event: downEvent, source: self)
+    }
+
+    override func mouseUp(with event: NSEvent) { downEvent = nil }
+
+    func draggingSession(_ session: NSDraggingSession, sourceOperationMaskFor context: NSDraggingContext) -> NSDragOperation { .copy }
+    func draggingSession(_ session: NSDraggingSession, endedAt screenPoint: NSPoint, operation: NSDragOperation) {
+        dragging = false
+        downEvent = nil
     }
 }
 
