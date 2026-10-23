@@ -163,7 +163,7 @@ private struct ToggleRow: View {
 
     var body: some View {
         SettingsRow(title, caption: caption) {
-            Toggle(title, isOn: $isOn).labelsHidden().toggleStyle(.switch).controlSize(.small)
+            Toggle(title, isOn: $isOn).labelsHidden().toggleStyle(FlatToggleStyle())
         }
     }
 }
@@ -181,11 +181,7 @@ private struct MenuRow<Value: Hashable>: View {
 
     var body: some View {
         SettingsRow(title) {
-            Picker(title, selection: $selection) {
-                ForEach(options, id: \.1) { Text($0.0).tag($0.1) }
-            }
-            .labelsHidden()
-            .fixedSize()
+            FlatPicker(selection: $selection, options: options)
         }
     }
 }
@@ -251,7 +247,6 @@ private struct GeneralPane: View {
     @State private var login = SMAppService.mainApp.status == .enabled
     @State private var error: String?
 
-    private static let choose = "\u{0}choose"
     private static let desktop = FileManager.default.urls(for: .desktopDirectory, in: .userDomainMask)[0].path
     private static let pictures = FileManager.default.urls(for: .picturesDirectory, in: .userDomainMask)[0].path
 
@@ -269,22 +264,23 @@ private struct GeneralPane: View {
         }
         SettingsGroup(title: "Files") {
             SettingsRow("Save to") {
-                Picker("Save to", selection: Binding(get: { folder }, set: { $0 == Self.choose ? chooseFolder() : (folder = $0) })) {
-                    Text("Ask Every Time").tag("")
-                    Divider()
-                    Text("Desktop").tag(Self.desktop)
-                    Text("Pictures").tag(Self.pictures)
-                    if ![Self.desktop, Self.pictures, ""].contains(folder) {
-                        Text(URL(fileURLWithPath: folder).lastPathComponent).tag(folder)
+                FlatMenu(title: folder.isEmpty ? "Ask Every Time" : folder == Self.desktop ? "Desktop" : folder == Self.pictures ? "Pictures" : URL(fileURLWithPath: folder).lastPathComponent) {
+                    Picker("", selection: $folder) {
+                        Text("Ask Every Time").tag("")
+                        Text("Desktop").tag(Self.desktop)
+                        Text("Pictures").tag(Self.pictures)
+                        if ![Self.desktop, Self.pictures, ""].contains(folder) {
+                            Text(URL(fileURLWithPath: folder).lastPathComponent).tag(folder)
+                        }
                     }
+                    .pickerStyle(.inline)
+                    .labelsHidden()
                     Divider()
-                    Text("Choose…").tag(Self.choose)
+                    Button("Choose…", action: chooseFolder)
                 }
-                .labelsHidden()
-                .fixedSize()
             }
             SettingsRow("File name", caption: "Use {date} and {time}") {
-                TextField("File name", text: $filename).labelsHidden().textFieldStyle(.roundedBorder).frame(width: 210)
+                TextField("File name", text: $filename).labelsHidden().textFieldStyle(FlatTextFieldStyle()).frame(width: 210)
             }
             MenuRow("Keep history", selection: $retention, options: [("Forever", 0), ("1 Day", 1), ("1 Week", 7), ("1 Month", 30)])
         }
@@ -322,12 +318,8 @@ private struct ScreenshotsPane: View {
         SettingsGroup(title: "After capture") {
             ActionTiles(recording: false)
             SettingsRow("Save as") {
-                Picker("Save as", selection: $format) {
-                    ForEach(ScreenshotFormat.allCases) { Text($0.title).tag($0.rawValue) }
-                }
-                .labelsHidden()
-                .pickerStyle(.segmented)
-                .fixedSize()
+                CapsulePicker(selection: Binding(get: { ScreenshotFormat(rawValue: format) ?? .png }, set: { format = $0.rawValue }),
+                              options: ScreenshotFormat.allCases, title: \.title)
             }
         }
         SettingsGroup(title: "Capture") {
@@ -526,8 +518,7 @@ private struct EditorPane: View {
                             .buttonStyle(.plain)
                             .accessibilityLabel("Color \(index + 1)")
                     }
-                    ColorPicker("Custom color", selection: Binding(get: { Color(nsColor: color.nsColor) }, set: { setColor(AnnotationColor(NSColor($0))) }), supportsOpacity: false)
-                        .labelsHidden()
+                    ColorWellButton(color: nil) { setColor(AnnotationColor($0)) }
                 }
             }
             SettingsRow("Stroke") {
@@ -728,6 +719,19 @@ private struct ShortcutsPane: View {
     private static let capture: [ShortcutAction] = [.allInOne, .area, .fullScreen, .window, .previousArea, .scrolling, .text]
 
     var body: some View {
+        if SystemShortcuts.screenshotsEnabled {
+            HStack(spacing: 12) {
+                Image(systemName: "exclamationmark.circle.fill").font(.system(size: 16)).foregroundStyle(.orange)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("macOS is using ⇧⌘3, ⇧⌘4 and ⇧⌘5").font(.system(size: 13, weight: .semibold))
+                    Text("Turn off Screenshots in Keyboard Shortcuts so they open Glint.").font(.system(size: 12)).foregroundStyle(.secondary)
+                }
+                Spacer(minLength: 8)
+                Button("Open") { NSWorkspace.shared.open(SystemShortcuts.settingsURL) }.buttonStyle(SecondaryButtonStyle())
+            }
+            .padding(14)
+            .background(Color.orange.opacity(0.08), in: RoundedRectangle(cornerRadius: Radius.card, style: .continuous))
+        }
         SettingsGroup(title: "Capture") {
             ForEach(Self.capture) { row($0) }
         }
@@ -740,7 +744,7 @@ private struct ShortcutsPane: View {
     }
 
     private func row(_ action: ShortcutAction) -> some View {
-        SettingsRow(action.title) { ShortcutRecorder(action: action, manager: shortcuts).frame(width: 150) }
+        SettingsRow(action.title) { ShortcutRecorder(action: action, manager: shortcuts).frame(width: 130, height: 26) }
     }
 }
 

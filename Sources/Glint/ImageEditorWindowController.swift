@@ -706,7 +706,7 @@ private struct BackgroundPanel: View {
                 HStack {
                     Text("Background").font(.headline)
                     Spacer()
-                    Toggle("Background", isOn: binding(\.enabled)).toggleStyle(.switch).labelsHidden().controlSize(.small)
+                    Toggle("Background", isOn: binding(\.enabled)).toggleStyle(FlatToggleStyle()).labelsHidden()
                 }
                 LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 8), count: 4), spacing: 8) {
                     ForEach(Array(Self.gradients.enumerated()), id: \.offset) { index, pair in
