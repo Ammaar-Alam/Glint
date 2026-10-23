@@ -5,6 +5,77 @@ import ScreenCaptureKit
 @testable import Clipt
 
 final class RecordingTests: XCTestCase {
+    func testPlanarScreenAudioCrossingFirstFrameDoesNotStopRecording() async throws {
+        let directory = try VideoTests.directory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let writer = try RecordingWriter(directory: directory, width: 64, height: 64, options: RecordingOptions())
+        writer.onFailure = { error in XCTFail("Recording stopped early: \(error.localizedDescription)") }
+        try await Self.enqueue(writer, type: .screen) { try Self.frame(at: 100) }
+        _ = try await writer.waitForFirstFrame()
+        try await Self.enqueue(writer, type: .audio) { try Self.planarAudio(at: 99.95, sampleRate: 48000, channels: 2) }
+        _ = try await writer.finish(at: 100.2)
+        let tracks = try await AVURLAsset(url: directory.appendingPathComponent("screen.mov")).loadTracks(withMediaType: .audio)
+        XCTAssertEqual(tracks.count, 1)
+        let range = try await XCTUnwrap(tracks.first).load(.timeRange)
+        XCTAssertGreaterThan(range.duration.seconds, 0.04)
+        XCTAssertLessThan(range.duration.seconds, 0.08)
+    }
+
+    func testPCMTrimPreservesPlanesSamplesAndNativeTiming() throws {
+        for commonFormat in [AVAudioCommonFormat.pcmFormatFloat32, .pcmFormatInt16] {
+            for interleaved in [false, true] {
+                for channels: AVAudioChannelCount in [1, 2] {
+                    for rate in [44_100.0, 48_000.0] {
+                        let sample = try Self.planarAudio(at: 10_000_000.12345, sampleRate: rate, channels: channels,
+                            interleaved: interleaved, frameCount: 1024, pattern: true, commonFormat: commonFormat)
+                        let frames = 257..<901
+                        let trimmed = try RecordingWriter.trimAudio(sample, frames: frames)
+                        XCTAssertEqual(trimmed.numSamples, frames.count)
+                        XCTAssertTrue(CMSampleBufferDataIsReady(trimmed))
+                        XCTAssertEqual(trimmed.duration.seconds, Double(frames.count) / rate, accuracy: 0.000000000001)
+                        var expected = CMSampleTimingInfo()
+                        XCTAssertEqual(CMSampleBufferGetSampleTimingInfo(sample, at: frames.lowerBound, timingInfoOut: &expected), noErr)
+                        XCTAssertEqual(CMTimeCompare(trimmed.presentationTimeStamp, expected.presentationTimeStamp), 0)
+                        XCTAssertFalse(trimmed.decodeTimeStamp.isValid)
+                        let description = try XCTUnwrap(trimmed.formatDescription)
+                        let asbd = try XCTUnwrap(CMAudioFormatDescriptionGetStreamBasicDescription(description))
+                        let format = try XCTUnwrap(AVAudioFormat(streamDescription: asbd))
+                        XCTAssertEqual(format.channelCount, channels)
+                        XCTAssertEqual(format.isInterleaved, interleaved)
+                        XCTAssertEqual(format.sampleRate, rate)
+                        XCTAssertEqual(format.commonFormat, commonFormat)
+                        let pcm = try XCTUnwrap(AVAudioPCMBuffer(pcmFormat: format, frameCapacity: AVAudioFrameCount(frames.count)))
+                        pcm.frameLength = pcm.frameCapacity
+                        XCTAssertEqual(CMSampleBufferCopyPCMDataIntoAudioBufferList(trimmed, at: 0, frameCount: Int32(frames.count), into: pcm.mutableAudioBufferList), noErr)
+                        for channel in 0..<Int(channels) {
+                            for frame in 0..<frames.count {
+                                let plane = interleaved ? 0 : channel
+                                let index = interleaved ? frame * Int(channels) + channel : frame
+                                let value: Float
+                                if let samples = pcm.floatChannelData { value = samples[plane][index] }
+                                else { value = Float(try XCTUnwrap(pcm.int16ChannelData)[plane][index]) }
+                                XCTAssertEqual(value, Float(channel * 10_000 + frames.lowerBound + frame))
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    func testAudioFrameBoundsPreserveAllSamplesAtLargeHostTimes() {
+        for start in [100.1, 86_400.12345, 1_000_000.12345, 10_000_000.12345] {
+            for rate in [44_100.0, 48_000.0, 96_000.0] {
+                let whole = start..<(start + 1024 / rate)
+                XCTAssertEqual(RecordingWriter.audioFrameRange(whole, sampleStart: start, frameCount: 1024, rate: rate), 0..<1024)
+                let exact = (start + 257 / rate)..<(start + 901 / rate)
+                XCTAssertEqual(RecordingWriter.audioFrameRange(exact, sampleStart: start, frameCount: 1024, rate: rate), 257..<901)
+                let fractional = (start + 257.25 / rate)..<(start + 900.75 / rate)
+                XCTAssertEqual(RecordingWriter.audioFrameRange(fractional, sampleStart: start, frameCount: 1024, rate: rate), 258..<900)
+            }
+        }
+    }
+
     func testRecoveryKeepsUnimportedProjectsAndRejectsMalformedImportMarker() async throws {
         let root = try VideoTests.directory()
         defer { try? FileManager.default.removeItem(at: root) }
@@ -63,6 +134,7 @@ final class RecordingTests: XCTestCase {
         defer { try? FileManager.default.removeItem(at: directory) }
         var options = RecordingOptions(); options.capturesMicrophone = true
         let writer = try RecordingWriter(directory: directory, width: 64, height: 64, options: options)
+        writer.onFailure = { error in XCTFail("Recording stopped early: \(error.localizedDescription)") }
         try await Self.enqueue(writer, type: .screen) { try Self.frame(at: 100) }
         let origin = try await writer.waitForFirstFrame()
         XCTAssertEqual(origin, 100, accuracy: 0.001)
@@ -118,6 +190,43 @@ final class RecordingTests: XCTestCase {
         var sample: CMSampleBuffer?
         guard let format, CMSampleBufferCreateReadyWithImageBuffer(allocator: kCFAllocatorDefault, imageBuffer: buffer, formatDescription: format, sampleTiming: &timing, sampleBufferOut: &sample) == noErr,
               let sample else { throw CliptError.message("Couldn’t create the video test sample.") }
+        return sample
+    }
+
+    static func planarAudio(at time: Double, sampleRate: Double, channels: AVAudioChannelCount,
+                            interleaved: Bool = false, frameCount: Int? = nil, pattern: Bool = false,
+                            commonFormat: AVAudioCommonFormat = .pcmFormatFloat32) throws -> CMSampleBuffer {
+        let format = try XCTUnwrap(AVAudioFormat(commonFormat: commonFormat, sampleRate: sampleRate, channels: channels, interleaved: interleaved))
+        let pcm = try XCTUnwrap(AVAudioPCMBuffer(pcmFormat: format, frameCapacity: AVAudioFrameCount(frameCount ?? Int(sampleRate / 10))))
+        pcm.frameLength = pcm.frameCapacity
+        for buffer in UnsafeMutableAudioBufferListPointer(pcm.mutableAudioBufferList) {
+            if let data = buffer.mData { memset(data, 0, Int(buffer.mDataByteSize)) }
+        }
+        if pattern {
+            for channel in 0..<Int(channels) {
+                for frame in 0..<Int(pcm.frameLength) {
+                    let plane = interleaved ? 0 : channel
+                    let index = interleaved ? frame * Int(channels) + channel : frame
+                    let value = channel * 10_000 + frame
+                    if let samples = pcm.floatChannelData { samples[plane][index] = Float(value) }
+                    else if let samples = pcm.int16ChannelData { samples[plane][index] = Int16(value) }
+                }
+            }
+        }
+        var description: CMAudioFormatDescription?
+        guard CMAudioFormatDescriptionCreate(allocator: kCFAllocatorDefault, asbd: format.streamDescription, layoutSize: 0, layout: nil,
+            magicCookieSize: 0, magicCookie: nil, extensions: nil, formatDescriptionOut: &description) == noErr,
+              let description else { throw CliptError.message("Couldn’t create the planar audio test format.") }
+        var timing = CMSampleTimingInfo(duration: CMTime(value: 1, timescale: CMTimeScale(sampleRate)),
+            presentationTimeStamp: CMTime(seconds: time, preferredTimescale: 1_000_000_000), decodeTimeStamp: .invalid)
+        var sample: CMSampleBuffer?
+        guard CMSampleBufferCreate(allocator: kCFAllocatorDefault, dataBuffer: nil, dataReady: false, makeDataReadyCallback: nil,
+            refcon: nil, formatDescription: description, sampleCount: Int(pcm.frameLength), sampleTimingEntryCount: 1,
+            sampleTimingArray: &timing, sampleSizeEntryCount: 0, sampleSizeArray: nil, sampleBufferOut: &sample) == noErr,
+              let sample else { throw CliptError.message("Couldn’t create the planar audio test sample.") }
+        guard CMSampleBufferSetDataBufferFromAudioBufferList(sample, blockBufferAllocator: kCFAllocatorDefault,
+            blockBufferMemoryAllocator: kCFAllocatorDefault, flags: 0, bufferList: pcm.audioBufferList) == noErr,
+              CMSampleBufferSetDataReady(sample) == noErr else { throw CliptError.message("Couldn’t attach the planar audio test buffers.") }
         return sample
     }
 
