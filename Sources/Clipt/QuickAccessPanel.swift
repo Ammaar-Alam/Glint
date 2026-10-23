@@ -36,6 +36,7 @@ final class QuickAccessPanel: NSPanel {
     private var isDraggingCapture = false
     private var pendingCaptures: [CaptureItem] = []
     private var pendingTimer: Timer?
+    private var isCaptureSuppressed = false
     var onEdit: ((CaptureItem) -> Void)?
     var onCopy: ((CaptureItem) -> Void)?
     var onSave: ((CaptureItem) -> Void)?
@@ -60,10 +61,10 @@ final class QuickAccessPanel: NSPanel {
     }
 
     func present(_ item: CaptureItem) {
-        if isVisible && (frame.contains(NSEvent.mouseLocation) || isDraggingCapture || NSEvent.pressedMouseButtons != 0) {
+        if isCaptureSuppressed || (isVisible && (frame.contains(NSEvent.mouseLocation) || isDraggingCapture || NSEvent.pressedMouseButtons != 0)) {
             pendingCaptures.removeAll { $0.id == item.id }
             pendingCaptures.append(item)
-            schedulePendingCaptures()
+            if !isCaptureSuppressed { schedulePendingCaptures() }
             return
         }
         captures[item.id] = item
@@ -78,7 +79,7 @@ final class QuickAccessPanel: NSPanel {
         guard pendingTimer == nil else { return }
         let timer = Timer(timeInterval: 0.15, repeats: true) { [weak self] _ in
             MainActor.assumeIsolated {
-                guard let self, !self.isDraggingCapture, NSEvent.pressedMouseButtons == 0,
+                guard let self, !self.isCaptureSuppressed, !self.isDraggingCapture, NSEvent.pressedMouseButtons == 0,
                       !self.isVisible || !self.frame.contains(NSEvent.mouseLocation) else { return }
                 self.pendingTimer?.invalidate()
                 self.pendingTimer = nil
@@ -97,6 +98,10 @@ final class QuickAccessPanel: NSPanel {
     }
 
     func dismissAll() {
+        for item in pendingCaptures { captures[item.id] = item; shelf.insert(item.id) }
+        pendingCaptures.removeAll()
+        pendingTimer?.invalidate()
+        pendingTimer = nil
         shelf.dismissAll()
         rebuild()
     }
@@ -107,8 +112,30 @@ final class QuickAccessPanel: NSPanel {
         present(item)
     }
 
+    func suppressForCapture() {
+        isCaptureSuppressed = true
+        dismissTimer?.invalidate()
+        dismissTimer = nil
+        pendingTimer?.invalidate()
+        pendingTimer = nil
+        orderOut(nil)
+    }
+
+    func restoreAfterCapture() {
+        isCaptureSuppressed = false
+        lastInteraction = Date()
+        let pending = pendingCaptures
+        pendingCaptures.removeAll()
+        for item in pending {
+            captures[item.id] = item
+            shelf.insert(item.id)
+        }
+        rebuild()
+        if !shelf.ids.isEmpty { orderFrontRegardless(); startDismissTimer() }
+    }
+
     private func rebuild() {
-        guard !shelf.ids.isEmpty else {
+        guard !shelf.ids.isEmpty, !isCaptureSuppressed else {
             orderOut(nil)
             dismissTimer?.invalidate()
             dismissTimer = nil

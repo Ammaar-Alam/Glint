@@ -101,11 +101,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     func application(_ sender: NSApplication, openFiles filenames: [String]) {
+        guard terminationTask == nil else { sender.reply(toOpenOrPrint: .cancel); return }
         for filename in filenames { importFile(URL(fileURLWithPath: filename), openEditor: true) }
         sender.reply(toOpenOrPrint: .success)
     }
 
     func application(_ application: NSApplication, open urls: [URL]) {
+        guard terminationTask == nil else { return }
         for url in urls {
             if url.isFileURL { importFile(url, openEditor: true); continue }
             guard url.scheme == "clipt" else { continue }
@@ -152,15 +154,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 recordingTask?.cancel()
                 await recordingTask?.value
             } else {
-                do { _ = try await ingestRecording(try await recorder.stop()) }
+                do { _ = try await finishRecording() }
                 catch { showError(error); return false }
             }
         }
         for editor in editors {
             if let editor = editor as? EditorClosing, !(await editor.prepareToClose()) { return false }
         }
-        if pendingWrites > 0 {
-            showError(CliptError.message("Your project is still being added to history. Try quitting again when it finishes."))
+        if pendingWrites > 0 || captureTask != nil || capture.isCapturing || recorder.state != .idle || recordingTask != nil {
+            showError(CliptError.message("Clipt is still finishing your work. Try quitting again when it finishes."))
             return false
         }
         return true
@@ -254,6 +256,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     private func perform(_ action: ShortcutAction) {
+        guard terminationTask == nil else { return }
         if let mode = CaptureMode(rawValue: action.rawValue) { takeCapture(mode); return }
         switch action {
         case .record:
@@ -267,14 +270,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     func takeCapture(_ mode: CaptureMode) {
-        guard captureTask == nil, !capture.isCapturing, recorder.state == .idle else { NSSound.beep(); return }
+        guard terminationTask == nil, captureTask == nil, !capture.isCapturing, recorder.state == .idle else { NSSound.beep(); return }
         captureTask = Task {
             defer { captureTask = nil }
             do {
                 guard let result = try await captureWithHiddenWindows(mode) else { return }
-                let item = try await library.ingest(result.url)
-                if let text = result.recognizedText { showRecognizedText(text) }
-                else { handleCapture(item) }
+                if let text = result.recognizedText {
+                    showRecognizedText(text)
+                    await cleanupTemporaryCapture(result.url)
+                } else { handleCapture(try await ingestTemporaryCapture(result.url)) }
                 if UserDefaults.standard.bool(forKey: "captureSound") { NSSound(named: "Pop")?.play() }
             } catch is CancellationError {} catch { showError(error) }
         }
@@ -288,6 +292,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     private func hideCaptureWindows() -> [NSWindow] {
+        shelf.suppressForCapture()
         let windows = NSApp.orderedWindows.filter(\.isVisible)
         windows.forEach { $0.orderOut(nil) }
         return windows
@@ -295,6 +300,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     private func restoreCaptureWindows(_ windows: [NSWindow]) {
         for window in windows.reversed() { window.orderFront(nil) }
+        shelf.restoreAfterCapture()
     }
 
     private func captureWithHiddenWindows(_ mode: CaptureMode) async throws -> CaptureResult? {
@@ -325,6 +331,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     func openFile() {
+        guard terminationTask == nil else { return }
         let panel = NSOpenPanel()
         panel.allowedContentTypes = [.image, .movie, UTType(exportedAs: "app.clipt.image-project", conformingTo: .package), UTType(exportedAs: "app.clipt.video-project", conformingTo: .package)]
         panel.allowsMultipleSelection = true
@@ -337,6 +344,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     func openClipboard() {
+        guard terminationTask == nil else { return }
         if let urls = NSPasteboard.general.readObjects(forClasses: [NSURL.self]) as? [URL], let url = urls.first {
             importFile(url, openEditor: true)
         } else if let image = NSImage(pasteboard: .general), let cgImage = image.cgImage(forProposedRect: nil, context: nil, hints: nil) {
@@ -346,7 +354,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 do {
                     let url = ImageFile.temporaryURL()
                     try await Task.detached { try ImageFile.write(cgImage, to: url) }.value
-                    let item = try await library.ingest(url)
+                    let item = try await ingestTemporaryCapture(url)
                     edit(item)
                 } catch { showError(error) }
             }
@@ -354,6 +362,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     func edit(_ item: CaptureItem) {
+        guard terminationTask == nil else { return }
         let url = item.url(in: library.root)
         guard FileManager.default.fileExists(atPath: url.path) else { showError(CliptError.message("This capture is no longer available.")); return }
         let exported: (URL) -> Void = { [weak self] url in self?.importFile(url, openEditor: false) }
@@ -366,7 +375,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 self.pendingWrites += 1
                 Task {
                     defer { self.pendingWrites -= 1 }
-                    do { self.pin(try await self.library.ingest(imageURL)) }
+                    do { self.pin(try await self.ingestTemporaryCapture(imageURL)) }
                     catch { showError(error) }
                 }
             }
@@ -492,13 +501,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     func showRecordingSetup() {
-        guard recorder.state == .idle, recordingTask == nil, !capture.isCapturing else { recordingPanel?.orderFrontRegardless(); return }
+        guard terminationTask == nil, recorder.state == .idle, recordingTask == nil, !capture.isCapturing else { recordingPanel?.orderFrontRegardless(); return }
         recordingSetup = makeWindow(title: "Record", size: NSSize(width: 460, height: 560), root: RecordingSetupView { [weak self] options in self?.startRecording(options) })
         recordingSetup?.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
     }
 
     private func startRecording(_ options: RecordingOptions) {
+        guard terminationTask == nil, recorder.state == .idle, recordingTask == nil, !capture.isCapturing else { return }
         recordingSetup?.orderOut(nil)
         recordingHiddenWindows = hideCaptureWindows()
         let panel = NSPanel(contentRect: NSRect(x: 0, y: 0, width: 360, height: 100), styleMask: [.titled, .nonactivatingPanel], backing: .buffered, defer: false)
@@ -525,13 +535,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         Task {
             defer { pendingWrites -= 1 }
             do {
-                let url = try await recorder.stop()
-                recordingPanel?.orderOut(nil)
-                restoreRecordingWindows()
-                let item = try await ingestRecording(url)
+                let item = try await finishRecording()
                 edit(item)
                 if let warning = recorder.lastWarning { showError(CliptError.message(warning)) }
-            } catch { recordingPanel?.orderOut(nil); restoreRecordingWindows(); showError(error) }
+            } catch { showError(error) }
         }
     }
 
@@ -547,6 +554,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private func restoreRecordingWindows() {
         restoreCaptureWindows(recordingHiddenWindows)
         recordingHiddenWindows.removeAll()
+    }
+
+    private func finishRecording() async throws -> CaptureItem {
+        defer { recordingPanel?.orderOut(nil); restoreRecordingWindows() }
+        return try await ingestRecording(try await recorder.stop())
     }
 
     private func ingestRecording(_ url: URL) async throws -> CaptureItem {
@@ -565,6 +577,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             catch { library.error = "The recording was saved, but its working copy couldn’t be removed: \(error.localizedDescription)" }
         }
         return item
+    }
+
+    private func ingestTemporaryCapture(_ url: URL) async throws -> CaptureItem {
+        let item = try await library.ingest(url)
+        await cleanupTemporaryCapture(url)
+        return item
+    }
+
+    private func cleanupTemporaryCapture(_ url: URL) async {
+        do { try await Task.detached(priority: .utility) { try ImageFile.removeTemporary(url) }.value }
+        catch { library.error = "The capture was saved, but its temporary file couldn’t be removed: \(error.localizedDescription)" }
     }
 
     private func importRecording(_ url: URL, openEditor: Bool) {
