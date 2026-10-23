@@ -291,6 +291,8 @@ private struct ImageEditorView: View {
         .padding(.horizontal, 12)
         .frame(height: 52)
         .background(.bar)
+        // menu items ignore keyboard shortcuts, so a hidden button carries print
+        .background(Button("Print", action: printImage).keyboardShortcut("p", modifiers: .command).hidden())
         .gesture(WindowDragGesture())
         .disabled(model.document == nil || model.busy)
     }
@@ -336,7 +338,7 @@ private struct ImageEditorView: View {
             }
             Section {
                 Button("Pin", action: pin).disabled(!model.canPin)
-                Button("Print…", action: printImage).keyboardShortcut("p", modifiers: .command)
+                Button("Print…", action: printImage)
                 Button("Save Project…", action: save)
             }
         } label: { Image(systemName: "ellipsis") }
