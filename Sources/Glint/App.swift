@@ -27,6 +27,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var historyWindow: NSWindow?
     private var settingsWindow: NSWindow?
     private var recordingPanel: NSPanel?
+    // outlines the recorded area and counts down over it, never part of the recording since Glint is excluded
+    private var recordingFrame: NSPanel?
     private var recordingOptions = RecordingOptions()
     private var editors: [NSWindowController] = []
     // the popup card standing in for each open editor, by editor window
@@ -50,7 +52,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let launchInBackground = launchEvent?.eventID == kAEOpenApplication &&
             (launchReason == keyAELaunchedAsLogInItem || launchReason == keyAELaunchedAsServiceItem)
         UserDefaults.standard.register(defaults: ["windowShadow": true, "shelfPosition": "bottomLeft", "filenameTemplate": "Glint {date} at {time}", "showMenuBarIcon": true,
-                                                  "showMagnifier": true, "shelfScale": 1.0, "shelfFollowsPointer": true])
+                                                  "showMagnifier": true, "shelfScale": 1.0, "shelfFollowsPointer": true, "record.countdown": 3])
         CaptureAction.migrate()
         _ = Updates.controller
         makeMainMenu()
@@ -757,14 +759,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             onCancel: { [weak self] in self?.recordingTask?.cancel() },
             onRestart: { [weak self] in self?.discardRecording(restart: true) },
             onDelete: { [weak self] in self?.discardRecording(restart: false) }))
+        // measured before sizing is switched off, after that the fitting size reads as zero
+        let height = host.fittingSize.height
         host.sizingOptions = []
         panel.contentView = host
-        let screen = NSScreen.screens.first { $0.frame.contains(NSEvent.mouseLocation) } ?? NSScreen.main
-        if let frame = screen?.visibleFrame {
-            // wide enough for every state, the capsule centers itself
-            let size = CGSize(width: 420, height: host.fittingSize.height)
-            panel.setFrame(CGRect(x: (frame.midX - size.width / 2).rounded(), y: frame.minY + 8, width: size.width, height: size.height), display: false)
+        let (area, outlined) = Self.recordingArea(target)
+        let screen = area.flatMap { area in NSScreen.screens.first { $0.frame.contains(CGPoint(x: area.midX, y: area.midY)) } }
+            ?? NSScreen.screens.first { $0.frame.contains(NSEvent.mouseLocation) } ?? NSScreen.main
+        if let screen {
+            // wide enough for every state, the capsule centers itself under the recorded area
+            let size = CGSize(width: 420, height: max(height, 72))
+            let bounds = screen.visibleFrame
+            let origin = area.map { CaptureGeometry.attach(size, to: $0, within: bounds) } ?? CGPoint(x: bounds.midX - size.width / 2, y: bounds.minY + 8)
+            panel.setFrame(CGRect(origin: CGPoint(x: origin.x.rounded(), y: origin.y.rounded()), size: size), display: false)
+            showRecordingFrame(area: outlined ? area : nil, on: screen)
         }
+        panel.level = NSWindow.Level(rawValue: NSWindow.Level.floating.rawValue + 1)
         recordingPanel = panel
         panel.orderFrontRegardless()
         recordingTask = Task {
@@ -822,7 +832,38 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
     }
 
+    // what is recorded in screen coordinates, and whether it gets an outline
+    // full screens pick the display but need no outline, windows can move so they are not outlined
+    private static func recordingArea(_ target: CaptureSelection) -> (CGRect?, outlined: Bool) {
+        let primaryHeight = NSScreen.screens.first?.frame.height ?? 0
+        switch target {
+        case .region(let rect, let mode): return (CaptureGeometry.cocoaRect(fromQuartz: rect, primaryHeight: primaryHeight), mode != .fullScreen)
+        case .window(let window): return (CaptureGeometry.cocoaRect(fromQuartz: window.frame, primaryHeight: primaryHeight), false)
+        case .record(let inner, _): return recordingArea(inner)
+        }
+    }
+
+    private func showRecordingFrame(area: CGRect?, on screen: NSScreen) {
+        recordingFrame?.orderOut(nil)
+        let panel = NSPanel(contentRect: screen.frame, styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
+        panel.level = .floating
+        panel.isOpaque = false
+        panel.backgroundColor = .clear
+        panel.hasShadow = false
+        panel.ignoresMouseEvents = true
+        panel.hidesOnDeactivate = false
+        panel.isReleasedWhenClosed = false
+        panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary]
+        let local = area.map { CGRect(x: $0.minX - screen.frame.minX, y: screen.frame.maxY - $0.maxY, width: $0.width, height: $0.height) }
+        panel.contentView = NSHostingView(rootView: RecordingFrame(recorder: recorder, area: local))
+        panel.setFrame(screen.frame, display: false)
+        recordingFrame = panel
+        panel.orderFrontRegardless()
+    }
+
     private func restoreRecordingWindows() {
+        recordingFrame?.orderOut(nil)
+        recordingFrame = nil
         restoreCaptureWindows(recordingHiddenWindows)
         recordingHiddenWindows.removeAll()
     }

@@ -2,83 +2,56 @@ import AppKit
 import AVFoundation
 import SwiftUI
 
-// the recording half of the capture bar
+// what goes into a recording as one row of small named switches
 struct RecordingBarControls: View {
     @Binding var options: RecordingOptions
 
     var body: some View {
         HStack(spacing: 2) {
-            Segmented {
-                format(.video, "Video")
-                format(.gif, "GIF")
-            }
+            toggle("Audio", help: "Record system audio", on: "speaker.wave.2.fill", off: "speaker.slash", isOn: $options.capturesSystemAudio)
+            toggle("Mic", help: "Record the microphone, right-click to choose one", on: "mic.fill", off: "mic.slash", isOn: $options.capturesMicrophone)
+                .contextMenu { devices(Self.microphones, selection: \.microphoneDeviceID, enabled: \.capturesMicrophone) }
+            toggle("Camera", help: "Show your camera, right-click to choose one", on: "video.fill", off: "video.slash", isOn: $options.capturesCamera)
+                .contextMenu { devices(Self.cameras, selection: \.cameraDeviceID, enabled: \.capturesCamera) }
             BarDivider()
-            toggle($options.capturesSystemAudio, on: "speaker.wave.2.fill", off: "speaker.slash", help: "System audio")
-            toggle($options.capturesMicrophone, on: "mic.fill", off: "mic.slash", help: "Microphone")
-            devices(Self.microphones, selection: $options.microphoneDeviceID, enabled: $options.capturesMicrophone, help: "Choose microphone")
-            toggle($options.capturesCamera, on: "video.fill", off: "video.slash", help: "Camera")
-            devices(Self.cameras, selection: $options.cameraDeviceID, enabled: $options.capturesCamera, help: "Choose camera")
-            BarDivider()
-            toggle($options.showsCursor, on: "cursorarrow", off: "cursorarrow.slash", help: "Cursor")
-            toggle($options.showsClicks, on: "cursorarrow.click.2", off: "cursorarrow.click", help: "Clicks")
-            toggle($options.showsKeystrokes, on: "keyboard.fill", off: "keyboard", help: "Keystrokes. Every key you type is saved with the recording")
-            MenuButton(help: "Options", items: menu) { Image(systemName: "slider.horizontal.3") }
+            toggle("Cursor", help: "Show the pointer", on: "cursorarrow", off: "cursorarrow.slash", isOn: $options.showsCursor)
+            toggle("Clicks", help: "Highlight clicks", on: "cursorarrow.click.2", off: "cursorarrow.click", isOn: $options.showsClicks)
+            toggle("Keys", help: "Show keys you press, right-click for shortcuts only", on: "keyboard.fill", off: "keyboard", isOn: $options.showsKeystrokes)
+                .contextMenu { Toggle("Only Shortcuts", isOn: $options.keystrokesOnlyShortcuts) }
+            toggle("Hide Icons", help: "Hide desktop icons while recording", on: "eye.slash", off: "eye.slash", isOn: $options.hideDesktop)
         }
     }
 
-    private func format(_ value: RecordingFormat, _ title: String) -> some View {
-        Button { options.format = value } label: { Text(title).font(.system(size: 12, weight: .semibold)) }
-            .buttonStyle(ToolButtonStyle(selected: options.format == value, size: CGSize(width: 44, height: 24), tint: .primary))
-            .accessibilityAddTraits(options.format == value ? .isSelected : [])
-    }
-
-    private func toggle(_ isOn: Binding<Bool>, on: String, off: String, help: String) -> some View {
+    private func toggle(_ title: String, help: String, on: String, off: String, isOn: Binding<Bool>) -> some View {
         Button { isOn.wrappedValue.toggle() } label: {
-            Image(systemName: isOn.wrappedValue ? on : off)
-                .foregroundStyle(isOn.wrappedValue ? Color.primary : Color.secondary)
+            VStack(spacing: 3) {
+                Image(systemName: isOn.wrappedValue ? on : off)
+                    .font(.system(size: 13, weight: .medium))
+                    .contentTransition(.symbolEffect(.replace))
+                    .frame(height: 16)
+                Text(title).font(.system(size: 10, weight: .medium)).lineLimit(1).minimumScaleFactor(0.85)
+            }
+            .foregroundStyle(isOn.wrappedValue ? Color.glint : Color.secondary)
+            .frame(maxWidth: .infinity)
         }
-        .buttonStyle(ToolButtonStyle(selected: isOn.wrappedValue, tint: .primary))
+        .buttonStyle(ToolButtonStyle(selected: isOn.wrappedValue, size: CGSize(width: 0, height: 40)))
         .help(help)
         .accessibilityLabel(help)
         .accessibilityValue(isOn.wrappedValue ? "On" : "Off")
     }
 
-    private func devices(_ list: [AVCaptureDevice], selection: Binding<String?>, enabled: Binding<Bool>, help: String) -> some View {
-        MenuButton(help: help, width: 14, items: {
-            ([nil] + list.map(Optional.some)).map { device in
-                let item = HandlerMenuItem(device?.localizedName ?? "System Default") {
-                    selection.wrappedValue = device?.uniqueID
-                    enabled.wrappedValue = true
-                }
-                item.state = selection.wrappedValue == device?.uniqueID ? .on : .off
-                return item
+    // right click picks the device, choosing one also turns the input on
+    @ViewBuilder
+    private func devices(_ list: [AVCaptureDevice], selection: WritableKeyPath<RecordingOptions, String?>, enabled: WritableKeyPath<RecordingOptions, Bool>) -> some View {
+        ForEach([nil] + list.map(Optional.some), id: \.?.uniqueID) { device in
+            Button {
+                options[keyPath: selection] = device?.uniqueID
+                options[keyPath: enabled] = true
+            } label: {
+                if options[keyPath: selection] == device?.uniqueID { Label(device?.localizedName ?? "System Default", systemImage: "checkmark") }
+                else { Text(device?.localizedName ?? "System Default") }
             }
-        }) {
-            Image(systemName: "chevron.down").font(.system(size: 8, weight: .bold)).foregroundStyle(.secondary)
         }
-        .padding(.leading, -2)
-    }
-
-    private func menu() -> [NSMenuItem] {
-        func submenu(_ title: String, _ choices: [(String, Int)], _ value: WritableKeyPath<RecordingOptions, Int>) -> NSMenuItem {
-            let item = NSMenuItem(title: title, action: nil, keyEquivalent: "")
-            let menu = NSMenu()
-            for (name, number) in choices {
-                let choice = HandlerMenuItem(name) { options[keyPath: value] = number }
-                choice.state = options[keyPath: value] == number ? .on : .off
-                menu.addItem(choice)
-            }
-            item.submenu = menu
-            return item
-        }
-        let desktop = HandlerMenuItem("Hide Desktop Icons") { options.hideDesktop.toggle() }
-        desktop.state = options.hideDesktop ? .on : .off
-        let shortcuts = HandlerMenuItem("Only Show Shortcuts") { options.keystrokesOnlyShortcuts.toggle() }
-        shortcuts.state = options.keystrokesOnlyShortcuts ? .on : .off
-        shortcuts.isEnabled = options.showsKeystrokes
-        return [submenu("Frame Rate", [("24 fps", 24), ("30 fps", 30), ("60 fps", 60)], \.framesPerSecond),
-                submenu("Resolution", [("1080p", 1920), ("1440p", 2560), ("4K", 3840)], \.maximumDimension),
-                .separator(), desktop, shortcuts]
     }
 
     private static var microphones: [AVCaptureDevice] {
@@ -140,9 +113,9 @@ struct RecordingControls: View {
         }
         .padding(.horizontal, 6)
         .frame(height: 40)
-        .background(.regularMaterial, in: Capsule())
-        .overlay(Capsule().strokeBorder(Color.primary.opacity(0.1)))
-        .shadow(color: .black.opacity(0.18), radius: 10, y: 3)
+        .background { Capsule().fill(Color.white).shadow(color: .black.opacity(0.2), radius: 12, y: 3) }
+        .overlay(Capsule().strokeBorder(Color.black.opacity(0.08)))
+        .animation(.snappy(duration: 0.22), value: recorder.state)
         .fixedSize()
         .padding(16)
         .onAppear { pulse = !reduceMotion }
@@ -193,3 +166,36 @@ struct RecordingControls: View {
             .accessibilityLabel(help)
     }
 }
+
+// the recorded area stays lit with an outline while the rest dims
+struct RecordingFrame: View {
+    let recorder: any RecordingStatus
+    // in the panel's top-left coordinates, nil for the whole display
+    let area: CGRect?
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    var body: some View {
+        GeometryReader { proxy in
+            let hole = area ?? CGRect(origin: .zero, size: proxy.size)
+            let counting = recorder.countdownRemaining > 0
+            ZStack {
+                // everything outside the recording stays dimmed, a little deeper while counting down
+                Path { path in
+                    path.addRect(CGRect(origin: .zero, size: proxy.size))
+                    path.addRect(hole)
+                }
+                .fill(Color.black.opacity(area == nil ? 0 : counting ? 0.4 : 0.25), style: FillStyle(eoFill: true))
+                if area != nil {
+                    Rectangle()
+                        .strokeBorder(Color.white, lineWidth: 1.5)
+                        .shadow(color: .black.opacity(0.35), radius: 2)
+                        .frame(width: hole.width + 3, height: hole.height + 3)
+                        .position(x: hole.midX, y: hole.midY)
+                }
+            }
+            .animation(.easeOut(duration: 0.3), value: recorder.countdownRemaining)
+        }
+        .ignoresSafeArea()
+    }
+}
+

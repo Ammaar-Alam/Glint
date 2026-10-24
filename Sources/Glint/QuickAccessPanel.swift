@@ -147,9 +147,48 @@ final class QuickAccessPanel: NSPanel {
 
     func dismiss(_ item: CaptureItem) {
         slideOut([item.id]) { [weak self] in
-            self?.shelf.dismiss(item.id)
-            self?.rebuild()
+            guard let self else { return }
+            let before = cardScreenFrames()
+            shelf.dismiss(item.id)
+            rebuild()
+            settle(from: before)
         }
+    }
+
+    private func cardScreenFrames() -> [UUID: CGRect] {
+        guard let window = contentView?.window else { return [:] }
+        return cards.mapValues { window.convertToScreen($0.convert($0.bounds, to: nil)) }
+    }
+
+    // cards left behind glide into the gap from where they were instead of jumping
+    private func settle(from before: [UUID: CGRect]) {
+        guard !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion, let container = contentView else { return }
+        let moving: [(card: NSView, from: CGRect, to: CGRect)] = cards.compactMap { id, card in
+            guard let old = before[id] else { return nil }
+            let new = convertToScreen(card.convert(card.bounds, to: nil))
+            return abs(old.minY - new.minY) > 0.5 ? (card, old, new) : nil
+        }
+        guard !moving.isEmpty else { return }
+        // the panel spans the old spots while they move so nothing is clipped, then shrinks back
+        let resting = frame
+        // only the height grows, a tucked card's old spot past the edge must not shift the panel sideways
+        let reach = moving.reduce(resting) { $0.union($1.from) }
+        let span = CGRect(x: resting.minX, y: reach.minY, width: resting.width, height: reach.height)
+        let lift = resting.minY - span.minY
+        setFrame(span, display: false)
+        for view in container.subviews { view.setFrameOrigin(CGPoint(x: view.frame.minX, y: view.frame.minY + lift)) }
+        for move in moving { move.card.setFrameOrigin(container.convert(convertFromScreen(move.from), from: nil).origin) }
+        NSAnimationContext.runAnimationGroup({ context in
+            context.duration = 0.26
+            context.timingFunction = CAMediaTimingFunction(controlPoints: 0.2, 0.9, 0.3, 1)
+            for move in moving { move.card.animator().setFrameOrigin(container.convert(convertFromScreen(move.to), from: nil).origin) }
+        }, completionHandler: {
+            MainActor.assumeIsolated {
+                guard self.contentView === container else { return }
+                self.setFrame(resting, display: true)
+                for view in container.subviews { view.setFrameOrigin(CGPoint(x: view.frame.minX, y: view.frame.minY - lift)) }
+            }
+        })
     }
 
     func dismissAll() {
