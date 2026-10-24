@@ -303,6 +303,7 @@ final class ImageEditorModel: ObservableObject {
             filled = annotation.filled
             bold = annotation.bold
             italic = annotation.italic
+            if [.arrow, .doubleArrow].contains(annotation.tool) { arrowStyle = annotation.arrowStyle ?? .open }
         }
     }
 
