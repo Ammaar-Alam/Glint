@@ -1,20 +1,104 @@
 import AppKit
+import ImageIO
 import XCTest
 @testable import Glint
 
 @MainActor
 final class EditorHitTests: XCTestCase {
-    private func openEditor() async throws -> ImageEditorWindowController {
+    private func openEditor(size: CGSize = CGSize(width: 400, height: 300)) async throws -> ImageEditorWindowController {
         let url = FileManager.default.temporaryDirectory.appendingPathComponent("\(UUID().uuidString).png")
         addTeardownBlock { try? FileManager.default.removeItem(at: url) }
-        let context = try XCTUnwrap(CGContext(data: nil, width: 400, height: 300, bitsPerComponent: 8, bytesPerRow: 0, space: CGColorSpace(name: CGColorSpace.sRGB)!, bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue))
+        let context = try XCTUnwrap(CGContext(data: nil, width: Int(size.width), height: Int(size.height), bitsPerComponent: 8, bytesPerRow: 0, space: CGColorSpace(name: CGColorSpace.sRGB)!, bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue))
         context.setFillColor(CGColor(gray: 0.9, alpha: 1))
-        context.fill(CGRect(x: 0, y: 0, width: 400, height: 300))
+        context.fill(CGRect(origin: .zero, size: size))
         try ImageFile.write(try XCTUnwrap(context.makeImage()), to: url)
         let editor = ImageEditorWindowController(url: url) { _ in }
         editor.showWindow(nil)
         for _ in 0..<50 where editor.model.document == nil { try await Task.sleep(for: .milliseconds(50)) }
         return editor
+    }
+
+    private func waitForPreview(_ model: ImageEditorModel, matching predicate: (CGImage) -> Bool) async throws {
+        for _ in 0..<250 {
+            if let preview = model.preview, predicate(preview) { return }
+            try await Task.sleep(for: .milliseconds(20))
+        }
+        XCTFail("preview did not reach the requested state")
+    }
+
+    func testBackgroundResizePublishesWhileSliderKeepsMoving() async throws {
+        let editor = try await openEditor(size: CGSize(width: 2400, height: 1600))
+        let model = editor.model
+        defer { model.shutdown(); editor.window?.orderOut(nil) }
+        model.canvas?.actualSize()
+        model.mutate("Background") { $0.background.enabled = true }
+        try await waitForPreview(model) { $0.width == Int(model.document!.outputSize.width) }
+        let originalSize = model.previewCanvasSize
+        model.beginAdjusting()
+        for index in 0..<250 {
+            model.mutate("Padding") { $0.background.padding = Double(index + 1) }
+            try await Task.sleep(for: .milliseconds(5))
+            if model.previewCanvasSize != originalSize { break }
+        }
+        XCTAssertNotEqual(model.previewCanvasSize, originalSize, "continuous size changes must not discard every completed frame")
+        XCTAssertGreaterThan(model.previewCanvasSize.width, 2400)
+        model.endAdjusting()
+        try await waitForPreview(model) { $0.width == Int(model.document!.outputSize.width) }
+        XCTAssertEqual(model.previewCanvasSize, model.document?.canvasSize)
+    }
+
+    func testInteractionRestoresQualityAndKeepsFullResolutionOutputs() async throws {
+        let editor = try await openEditor(size: CGSize(width: 2400, height: 1600))
+        let model = editor.model
+        defer { model.shutdown(); editor.window?.orderOut(nil) }
+        model.addImage(url: model.inputURL)
+        for _ in 0..<100 where model.document?.annotations.isEmpty != false { try await Task.sleep(for: .milliseconds(20)) }
+        model.canvas?.actualSize()
+        try await waitForPreview(model) { $0.width == 2400 }
+        let original = try XCTUnwrap(model.document)
+        var moved = original
+        var image = try XCTUnwrap(original.annotations.first)
+        image.move(dx: 200, dy: 100)
+        moved.annotations = [image]
+        model.undoManager.removeAllActions()
+        model.undoManager.groupsByEvent = false
+        model.undoManager.beginUndoGrouping()
+        model.updateGesture(moved)
+        try await waitForPreview(model) { $0.width < 2400 }
+        let data = try ImageEditorModel.pngData(ImageRenderer.render(model.snapshot()))
+        let copied = try ImageProject.readImage(try XCTUnwrap(CGImageSourceCreateWithData(data as CFData, nil)))
+        XCTAssertEqual(copied.width, 2400)
+        XCTAssertEqual(copied.height, 1600)
+        model.finishGesture(from: original, action: "Move")
+        model.undoManager.endUndoGrouping()
+        try await waitForPreview(model) { $0.width == 2400 }
+        model.undoManager.undo()
+        XCTAssertEqual(model.document, original)
+        XCTAssertFalse(model.undoManager.canUndo)
+
+        for cancel in [false, true] {
+            model.updateGesture(moved)
+            try await waitForPreview(model) { $0.width < 2400 }
+            if cancel { model.cancelGesture(restoring: original) }
+            else {
+                model.updateGesture(original)
+                model.finishGesture(from: original, action: "Move")
+            }
+            try await waitForPreview(model) { $0.width == 2400 }
+            XCTAssertEqual(model.document, original)
+        }
+
+        model.undoManager.groupsByEvent = true
+        model.tool = .crop
+        model.setCropDraft(CGRect(x: 100, y: 200, width: 1200, height: 800))
+        model.mutate("Output Size") { $0.outputScale = 2 }
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("\(UUID().uuidString).png")
+        defer { try? FileManager.default.removeItem(at: url) }
+        try await model.export(to: url, type: .png)
+        let exported = try ImageFile.read(url)
+        XCTAssertEqual(exported.width, 2400)
+        XCTAssertEqual(exported.height, 1600)
+        XCTAssertNil(model.cropDraft)
     }
 
     // sliders in the editor bar must receive their own drags instead of moving the window
