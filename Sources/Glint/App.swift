@@ -627,7 +627,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             let window = makeWindow(title: "Glint", size: NSSize(width: 1000, height: 680), root: HistoryView(
                 library: library, shortcuts: shortcuts, onCommand: { [weak self] in self?.perform($0, on: $1) }, onImport: openFile,
                 onCapture: { [weak self] in self?.takeCapture(.area) }, onRecord: { [weak self] in self?.showRecordingSetup() }
-            ))
+            ), draggable: false)
             // an empty unified toolbar only sets the titlebar height, the view draws the bar
             window.styleMask.insert(.fullSizeContentView)
             window.titlebarAppearsTransparent = true
@@ -881,11 +881,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         return String(format: "%02d:%02d", value / 60, value % 60)
     }
 
-    private func makeWindow<Content: View>(title: String, size: NSSize, root: Content) -> NSWindow {
+    // windows that drag only from their own bar pass draggable: false
+    private func makeWindow<Content: View>(title: String, size: NSSize, root: Content, draggable: Bool = true) -> NSWindow {
         let window = NSWindow(contentRect: NSRect(origin: .zero, size: size), styleMask: [.titled, .closable, .miniaturizable, .resizable], backing: .buffered, defer: false)
         window.title = title
         window.isReleasedWhenClosed = false
-        window.contentView = NSHostingView(rootView: root)
+        window.contentView = draggable ? NSHostingView(rootView: root) : StaticHostingView(rootView: root)
         window.center()
         return window
     }

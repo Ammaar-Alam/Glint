@@ -27,7 +27,7 @@ final class ImageEditorWindowController: NSWindowController, NSWindowDelegate, E
         window.tabbingMode = .disallowed
         super.init(window: window)
         window.delegate = self
-        window.contentViewController = NSHostingController(rootView: ImageEditorView(model: model, actions: EditorActions(
+        window.contentView = StaticHostingView(rootView: ImageEditorView(model: model, actions: EditorActions(
             export: { [weak self] in self?.exportImage() }, saveProject: { [weak self] in self?.saveProject() },
             printImage: { [weak self] in self?.printImage() }, pin: { [weak self] in self?.pinImage() },
             capture: { [weak self] in self?.captureImage() }, done: { [weak self] in self?.finishEditing() },
