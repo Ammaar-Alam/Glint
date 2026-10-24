@@ -213,13 +213,18 @@ enum ImageRenderer {
         }
     }
 
-    private static func drawText(_ text: String, in rect: CGRect, fontSize: CGFloat, color: AnnotationColor,
-                                 bold: Bool, italic: Bool, centered: Bool = false, context: CGContext) {
-        var font = CTFontCreateWithName("Helvetica" as CFString, fontSize, nil)
+    // the one text face, so typing in place looks like the rendered result
+    static func textFont(size: CGFloat, bold: Bool, italic: Bool) -> CTFont {
+        let font = CTFontCreateWithName("Helvetica" as CFString, size, nil)
         var traits: CTFontSymbolicTraits = []
         if bold { traits.insert(.boldTrait) }
         if italic { traits.insert(.italicTrait) }
-        if let styled = CTFontCreateCopyWithSymbolicTraits(font, fontSize, nil, traits, traits) { font = styled }
+        return CTFontCreateCopyWithSymbolicTraits(font, size, nil, traits, traits) ?? font
+    }
+
+    private static func drawText(_ text: String, in rect: CGRect, fontSize: CGFloat, color: AnnotationColor,
+                                 bold: Bool, italic: Bool, centered: Bool = false, context: CGContext) {
+        let font = textFont(size: fontSize, bold: bold, italic: italic)
         let string = NSAttributedString(string: text, attributes: [
             NSAttributedString.Key(kCTFontAttributeName as String): font,
             NSAttributedString.Key(kCTForegroundColorAttributeName as String): color.cgColor

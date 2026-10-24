@@ -313,6 +313,7 @@ final class ImageEditorModel: ObservableObject {
     }
 
     func changeStyle(_ update: (inout ImageAnnotation) -> Void) {
+        canvas?.restyleEditingText(update)
         guard !selectedIDs.isEmpty else { return }
         mutate("Change Style") { document in
             for index in document.annotations.indices where selectedIDs.contains(document.annotations[index].id) {

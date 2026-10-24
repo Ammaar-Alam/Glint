@@ -488,10 +488,8 @@ final class ImageCanvasView: NSView {
         scroll.layer?.cornerRadius = 4
         let text = AnnotationTextView(frame: CGRect(origin: .zero, size: frame.size))
         text.isRichText = false
-        text.font = NSFont.systemFont(ofSize: annotation.fontSize, weight: annotation.bold ? .bold : .regular)
-        text.textColor = annotation.color.nsColor
+        applyStyle(annotation, to: text)
         text.drawsBackground = false
-        text.insertionPointColor = annotation.color.nsColor
         text.string = annotation.text
         text.textContainerInset = CGSize(width: 4, height: 4)
         text.autoresizingMask = [.width]
@@ -504,6 +502,20 @@ final class ImageCanvasView: NSView {
         window?.makeFirstResponder(text)
         text.selectAll(nil)
         model.status = "⌘ Return to finish · Escape to cancel"
+    }
+
+    // style changes made while typing land on the text being typed
+    func restyleEditingText(_ update: (inout ImageAnnotation) -> Void) {
+        guard var annotation = editingAnnotation, let textEditor else { return }
+        update(&annotation)
+        editingAnnotation = annotation
+        applyStyle(annotation, to: textEditor)
+    }
+
+    private func applyStyle(_ annotation: ImageAnnotation, to text: NSTextView) {
+        text.font = ImageRenderer.textFont(size: annotation.fontSize, bold: annotation.bold, italic: annotation.italic) as NSFont
+        text.textColor = annotation.color.nsColor
+        text.insertionPointColor = annotation.color.nsColor
     }
 
     private func finishText(cancelled: Bool) {
