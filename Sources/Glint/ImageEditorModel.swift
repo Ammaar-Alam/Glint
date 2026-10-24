@@ -23,27 +23,22 @@ final class ImageEditorModel: ObservableObject {
     @Published var tool: AnnotationTool = .arrow { didSet { toolChanged(from: oldValue) } }
     // crop edits a draft over the whole image and applies it when the crop tool is left
     @Published private(set) var cropDraft: CGRect?
-    @Published var color = EditorDefaults.color
-    @Published var lineWidth = EditorDefaults.lineWidth
-    @Published var fontSize: Double = 28
-    @Published var filled = false
-    @Published var bold = true
-    @Published var italic = false
+    @Published private(set) var toolStyle = AnnotationStyle(color: EditorDefaults.color, lineWidth: EditorDefaults.lineWidth,
+                                                          arrowStyle: UserDefaults.standard.string(forKey: "arrowStyle").flatMap(ArrowStyle.init(rawValue:)) ?? .tapered)
+    @Published private(set) var editingTextID: UUID?
+    var style: AnnotationStyle { selectedAnnotations.last?.style ?? toolStyle }
     @Published var busy = false
     @Published var status = "Opening image…"
     @Published var errorMessage: String?
     @Published var zoomLabel = "Fit"
     @Published var cropAspectRatio = 0.0 { didSet { fitCropDraftToRatio() } }
     @Published var smartHighlight = true
-    @Published var arrowStyle = UserDefaults.standard.string(forKey: "arrowStyle").flatMap(ArrowStyle.init(rawValue:)) ?? .tapered {
-        didSet { UserDefaults.standard.set(arrowStyle.rawValue, forKey: "arrowStyle") }
-    }
     @Published var canCapture = false
     @Published var canPin = false
     @Published var backgroundPresets: [ImageBackground] = []
     @Published var showsBackgroundPanel = false
 
-    let undoManager = UndoManager()
+    lazy var undoManager: UndoManager = ImageEditorUndoManager(model: self)
     let inputURL: URL
     var projectURL: URL?
     weak var canvas: ImageCanvasView?
@@ -57,7 +52,6 @@ final class ImageEditorModel: ObservableObject {
     private var renderTask: Task<Void, Never>?
     private var ocrTask: Task<Void, Never>?
     private var renderRevision = 0
-    private var isGesturing = false
     private var isClosed = false
     private var textBoxes: [CGRect] = []
     private var backgroundLoadID = UUID()
@@ -106,6 +100,10 @@ final class ImageEditorModel: ObservableObject {
         renderTask?.cancel(); renderTask = nil
         ocrTask?.cancel(); ocrTask = nil
         undoManager.removeAllActions()
+        transaction = nil
+        isAdjusting = false
+        editingTextID = nil
+        canvas?.endEditingText()
         source = nil
         insertedImages.removeAll()
         preview = nil
@@ -135,9 +133,12 @@ final class ImageEditorModel: ObservableObject {
 
     // what the canvas shows, the whole uncropped image without a background while cropping
     var displayDocument: ImageDocument? {
-        guard var document, cropDraft != nil else { return document }
-        document.cropRect = Self.cropBounds(document)
-        document.background.enabled = false
+        guard var document else { return nil }
+        if let editingTextID { document.annotations.removeAll { $0.id == editingTextID } }
+        if cropDraft != nil {
+            document.cropRect = Self.cropBounds(document)
+            document.background.enabled = false
+        }
         return document
     }
 
@@ -196,54 +197,118 @@ final class ImageEditorModel: ObservableObject {
         do { _ = try next.validated() }
         catch { errorMessage = error.localizedDescription; return }
         document = next
-        if adjustmentStart == nil { registerUndo(previous, action: action) } else { adjustmentAction = action }
+        if transaction == nil { registerUndo(previous, action: action) } else { transaction?.action = action }
         refreshPreview()
     }
 
-    // a slider drag edits live and becomes one undo step when released
-    private var adjustmentStart: ImageDocument?
-    private var adjustmentAction = ""
-    var isAdjusting: Bool { adjustmentStart != nil }
+    private enum Interaction { case gesture, adjustment, text }
+    private var transaction: (start: ImageDocument, action: String, kind: Interaction)?
+    var gestureStart: ImageDocument? { transaction?.kind == .gesture ? transaction?.start : nil }
+    var isGesturing: Bool { transaction?.kind == .gesture }
+    private(set) var isAdjusting = false
+    var hasPendingChanges: Bool { transaction.map { $0.start != document } ?? false }
 
-    func beginAdjusting() { adjustmentStart = document }
+    private func begin(_ kind: Interaction) {
+        guard transaction == nil, let document else { return }
+        transaction = (document, "Edit", kind)
+    }
+
+    func beginGesture() { begin(.gesture) }
+    func beginAdjusting() { begin(.adjustment); isAdjusting = true }
 
     func endAdjusting() {
-        guard let start = adjustmentStart else { return }
-        adjustmentStart = nil
-        if document != start { registerUndo(start, action: adjustmentAction) }
-        canvas?.updateCanvasSize()
-        refreshPreview()
+        isAdjusting = false
+        if transaction?.kind == .adjustment { finishGesture() } else { refreshPreview() }
     }
 
     func updateGesture(_ next: ImageDocument) {
-        isGesturing = true
+        guard isGesturing else { return }
         document = next
         refreshPreview()
     }
 
-    func finishGesture(from previous: ImageDocument, action: String) {
-        guard document != previous || isGesturing else { return }
-        isGesturing = false
+    func finishGesture(action: String? = nil) {
+        guard let transaction else { return }
+        self.transaction = nil
+        isAdjusting = false
         do { if let document { _ = try document.validated() } }
-        catch { document = previous; errorMessage = error.localizedDescription }
-        if document != previous { registerUndo(previous, action: action) }
+        catch { document = transaction.start; errorMessage = error.localizedDescription }
+        if document != transaction.start { registerUndo(transaction.start, action: action ?? transaction.action) }
+        canvas?.updateCanvasSize()
         refreshPreview()
     }
 
-    func cancelGesture(restoring previous: ImageDocument) {
-        isGesturing = false
-        document = previous
+    func cancelGesture() {
+        guard let transaction else { return }
+        self.transaction = nil
+        isAdjusting = false
+        document = transaction.start
+        selectedIDs.formIntersection(Set(transaction.start.annotations.map(\.id)))
+        canvas?.updateCanvasSize()
         refreshPreview()
+    }
+
+    func beginText(_ annotation: ImageAnnotation) {
+        finishText()
+        finishGesture()
+        begin(.text)
+        editingTextID = annotation.id
+        selectedIDs = [annotation.id]
+        mutate("Edit Text") { document in
+            if !document.annotations.contains(where: { $0.id == annotation.id }) { document.annotations.append(annotation) }
+        }
+        refreshPreview()
+    }
+
+    func updateText(_ text: String, height: Double) {
+        guard let id = editingTextID else { return }
+        mutate("Edit Text") { document in
+            guard let index = document.annotations.firstIndex(where: { $0.id == id }) else { return }
+            document.annotations[index].text = text
+            document.annotations[index].rect.size.height = height
+        }
+    }
+
+    func finishText(cancelled: Bool = false) {
+        guard let id = editingTextID else { return }
+        canvas?.updateEditingText()
+        editingTextID = nil
+        canvas?.endEditingText()
+        if cancelled { cancelGesture() }
+        else {
+            mutate("Edit Text") { $0.annotations.removeAll { $0.id == id && $0.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty } }
+            finishGesture(action: "Edit Text")
+        }
+        selectedIDs.formIntersection(Set(document?.annotations.map(\.id) ?? []))
+        refreshPreview()
+    }
+
+    func finishInteraction() {
+        finishText()
+        finishGesture()
+    }
+
+    func finishedContents() throws -> ImageProjectContents {
+        finishInteraction()
+        if tool == .crop { tool = .select }
+        return try snapshot()
     }
 
     private func registerUndo(_ previous: ImageDocument, action: String) {
+        let group = undoManager.groupingLevel == 0 && !undoManager.isUndoing && !undoManager.isRedoing
+        if group { undoManager.beginUndoGrouping() }
         undoManager.registerUndo(withTarget: self) { model in
             MainActor.assumeIsolated { model.restore(previous, action: action) }
         }
         undoManager.setActionName(action)
+        if group { undoManager.endUndoGrouping() }
     }
 
     private func restore(_ previous: ImageDocument, action: String) {
+        transaction = nil
+        isAdjusting = false
+        editingTextID = nil
+        canvas?.endEditingText()
         guard let current = document else { return }
         registerUndo(current, action: action)
         document = previous
@@ -293,13 +358,8 @@ final class ImageEditorModel: ObservableObject {
 
     func newAnnotation(tool: AnnotationTool, at point: CGPoint) -> ImageAnnotation {
         var annotation = ImageAnnotation(tool: tool, rect: CGRect(origin: point, size: .zero))
-        annotation.color = tool == .redact ? .ink : color
-        annotation.lineWidth = lineWidth
-        annotation.fontSize = fontSize
-        annotation.filled = filled
-        annotation.bold = bold
-        annotation.italic = italic
-        if [.arrow, .doubleArrow].contains(tool) { annotation.arrowStyle = arrowStyle }
+        annotation.style = toolStyle
+        if tool == .redact { annotation.color = .ink }
         annotation.number = (document?.annotations.filter { $0.tool == .counter }.map(\.number).max() ?? 0) + 1
         return annotation
     }
@@ -310,30 +370,26 @@ final class ImageEditorModel: ObservableObject {
                 if selectedIDs.contains(id) { selectedIDs.remove(id) } else { selectedIDs.insert(id) }
             } else { selectedIDs = [id] }
         } else if !extending { selectedIDs = [] }
-        if let annotation = selectedAnnotations.last {
-            color = annotation.color
-            lineWidth = annotation.lineWidth
-            fontSize = annotation.fontSize
-            filled = annotation.filled
-            bold = annotation.bold
-            italic = annotation.italic
-            if [.arrow, .doubleArrow].contains(annotation.tool) { arrowStyle = annotation.arrowStyle ?? .open }
-        }
     }
 
-    func setColor(_ color: AnnotationColor) {
-        self.color = color
-        changeStyle { $0.color = color }
-    }
-
-    func changeStyle(_ update: (inout ImageAnnotation) -> Void) {
-        canvas?.restyleEditingText(update)
-        guard !selectedIDs.isEmpty else { return }
+    func setStyle(_ update: (inout AnnotationStyle) -> Void) {
+        var next = style
+        update(&next)
+        toolStyle = next
+        UserDefaults.standard.set(next.arrowStyle.rawValue, forKey: "arrowStyle")
         mutate("Change Style") { document in
             for index in document.annotations.indices where selectedIDs.contains(document.annotations[index].id) {
-                update(&document.annotations[index])
+                var selectedStyle = document.annotations[index].style
+                update(&selectedStyle)
+                let sizeChanged = document.annotations[index].fontSize != selectedStyle.fontSize
+                document.annotations[index].style = selectedStyle
+                if sizeChanged, document.annotations[index].tool == .counter {
+                    let rect = document.annotations[index].rect, side = max(32, selectedStyle.fontSize * 1.6)
+                    document.annotations[index].rect = CGRect(x: rect.midX - side / 2, y: rect.midY - side / 2, width: side, height: side)
+                }
             }
         }
+        canvas?.restyleEditingText()
     }
 
     func deleteSelection() {
@@ -526,8 +582,7 @@ final class ImageEditorModel: ObservableObject {
 
     func export(to url: URL, type: UTType, quality: Double = 0.95) async throws {
         guard !busy else { return }
-        canvas?.commitEditing()
-        let contents = try snapshot()
+        let contents = try finishedContents()
         busy = true
         status = "Exporting…"
         defer { busy = false; status = "" }
@@ -540,8 +595,7 @@ final class ImageEditorModel: ObservableObject {
 
     func saveProject(to url: URL) async throws {
         guard !busy else { return }
-        canvas?.commitEditing()
-        let contents = try snapshot()
+        let contents = try finishedContents()
         busy = true
         status = "Saving project…"
         defer { busy = false; status = "" }
@@ -553,7 +607,9 @@ final class ImageEditorModel: ObservableObject {
 
     func copyImage() {
         guard !busy, !isClosed else { return }
-        canvas?.commitEditing()
+        let contents: ImageProjectContents
+        do { contents = try finishedContents() }
+        catch { errorMessage = error.localizedDescription; return }
         let clipboard = ClipboardWriter.general
         let request = clipboard.begin()
         busy = true
@@ -561,7 +617,6 @@ final class ImageEditorModel: ObservableObject {
         Task {
             defer { busy = false; status = "" }
             do {
-                let contents = try snapshot()
                 let data = try await Task.detached(priority: .userInitiated) {
                     try Self.pngData(ImageRenderer.render(contents))
                 }.value
@@ -673,4 +728,13 @@ final class ImageEditorModel: ObservableObject {
             }
         }
     }
+}
+
+@MainActor
+private final class ImageEditorUndoManager: UndoManager {
+    weak var model: ImageEditorModel?
+    init(model: ImageEditorModel) { self.model = model; super.init() }
+    override var canUndo: Bool { model?.hasPendingChanges == true || super.canUndo }
+    override func undo() { model?.finishInteraction(); super.undo() }
+    override func redo() { model?.finishInteraction(); super.redo() }
 }

@@ -63,13 +63,14 @@ final class EditorHitTests: XCTestCase {
         model.undoManager.removeAllActions()
         model.undoManager.groupsByEvent = false
         model.undoManager.beginUndoGrouping()
+        model.beginGesture()
         model.updateGesture(moved)
         try await waitForPreview(model) { $0.width < 2400 }
         let data = try ImageEditorModel.pngData(ImageRenderer.render(model.snapshot()))
         let copied = try ImageProject.readImage(try XCTUnwrap(CGImageSourceCreateWithData(data as CFData, nil)))
         XCTAssertEqual(copied.width, 2400)
         XCTAssertEqual(copied.height, 1600)
-        model.finishGesture(from: original, action: "Move")
+        model.finishGesture(action: "Move")
         model.undoManager.endUndoGrouping()
         try await waitForPreview(model) { $0.width == 2400 }
         model.undoManager.undo()
@@ -77,12 +78,13 @@ final class EditorHitTests: XCTestCase {
         XCTAssertFalse(model.undoManager.canUndo)
 
         for cancel in [false, true] {
+            model.beginGesture()
             model.updateGesture(moved)
             try await waitForPreview(model) { $0.width < 2400 }
-            if cancel { model.cancelGesture(restoring: original) }
+            if cancel { model.cancelGesture() }
             else {
                 model.updateGesture(original)
-                model.finishGesture(from: original, action: "Move")
+                model.finishGesture(action: "Move")
             }
             try await waitForPreview(model) { $0.width == 2400 }
             XCTAssertEqual(model.document, original)
@@ -121,7 +123,7 @@ final class EditorHitTests: XCTestCase {
         defer { editor.model.shutdown(); editor.window?.orderOut(nil) }
         editor.model.tool = .crop
         editor.model.setCropDraft(CGRect(x: 20, y: 30, width: 200, height: 100))
-        editor.model.canvas?.commitEditing()
+        _ = try editor.model.finishedContents()
         XCTAssertEqual(editor.model.document?.cropRect, CGRect(x: 20, y: 30, width: 200, height: 100))
         XCTAssertNil(editor.model.cropDraft)
         XCTAssertTrue(editor.model.hasUnsavedChanges)
@@ -142,11 +144,11 @@ final class EditorHitTests: XCTestCase {
     func testSelectingAnArrowAdoptsItsStyle() async throws {
         let editor = try await openEditor()
         defer { editor.model.shutdown(); editor.window?.orderOut(nil) }
-        editor.model.arrowStyle = .tapered
+        editor.model.setStyle { $0.arrowStyle = .tapered }
         let legacy = ImageAnnotation(tool: .arrow, rect: .zero, points: [CGPoint(x: 10, y: 10), CGPoint(x: 90, y: 60)])
         editor.model.mutate("Add") { $0.annotations.append(legacy) }
         editor.model.select(legacy.id)
-        XCTAssertEqual(editor.model.arrowStyle, .open)
+        XCTAssertEqual(editor.model.style.arrowStyle, .open)
     }
 
     func testStyleChangesReachTextBeingTyped() async throws {
@@ -163,10 +165,10 @@ final class EditorHitTests: XCTestCase {
         let typing = try XCTUnwrap(window.firstResponder as? NSTextView)
         typing.insertText("Hello", replacementRange: NSRange(location: NSNotFound, length: 0))
         typing.selectAll(nil)
-        editor.model.changeStyle { $0.fontSize = 60; $0.italic = true; $0.bold = false }
+        editor.model.setStyle { $0.fontSize = 60; $0.italic = true; $0.bold = false }
         XCTAssertEqual(typing.font?.pointSize, 60)
         XCTAssertTrue(typing.font?.fontDescriptor.symbolicTraits.contains(.italic) ?? false)
-        canvas.commitEditing()
+        _ = try editor.model.finishedContents()
         let text = try XCTUnwrap(editor.model.document?.annotations.first { $0.tool == .text })
         XCTAssertEqual(text.text, "Hello")
         XCTAssertEqual(text.fontSize, 60)
