@@ -43,7 +43,11 @@ final class QuickAccessPanel: NSPanel {
     private var isCaptureSuppressed = false
     // cards whose editor is open wait at the screen edge until it closes
     private var tucked: Set<UUID> = []
-    private var cards: [UUID: NSView] = [:]
+    private var cards: [UUID: QuickAccessCard] = [:]
+    // edits that arrived while tucked flash once when they come back
+    private var freshEdits: Set<UUID> = []
+    private static let peek: CGFloat = 36
+    private var leaving: Set<UUID> = []
     private var placesRight = false
     var onCommand: ((CaptureCommand, CaptureItem) -> Void)?
     var onHistory: (() -> Void)?
@@ -76,7 +80,7 @@ final class QuickAccessPanel: NSPanel {
         // a saved edit takes its original's place, still tucked while the editor stays open
         if let old, shelf.ids.contains(old) {
             shelf.replace(old, with: item.id)
-            if tucked.remove(old) != nil { tucked.insert(item.id) }
+            if tucked.remove(old) != nil { tucked.insert(item.id); freshEdits.insert(item.id) }
         } else { shelf.insert(item.id) }
         lastInteraction = Date()
         rebuild()
@@ -92,23 +96,25 @@ final class QuickAccessPanel: NSPanel {
     func untuck(_ id: UUID) {
         guard tucked.remove(id) != nil else { return }
         lastInteraction = Date()
-        slide(id)
+        let fresh = freshEdits.remove(id) != nil
+        slide(id) { [weak self] in if fresh { self?.cards[id]?.flash() } }
     }
 
-    private func slide(_ id: UUID) {
+    // slides with a little overshoot, a hovered sliver leans out to be found
+    private func slide(_ id: UUID, nudge: CGFloat = 0, completion: (() -> Void)? = nil) {
         guard let card = cards[id], let width = contentView?.bounds.width else { return }
-        let x = cardX(id, view: card, width: width)
-        NSAnimationContext.runAnimationGroup { context in
-            context.duration = 0.3
-            context.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+        let x = cardX(id, view: card, width: width) + (placesRight ? -nudge : nudge)
+        card.setTucked(tucked.contains(id), onRight: placesRight, peek: Self.peek, animated: true)
+        NSAnimationContext.runAnimationGroup({ context in
+            context.duration = nudge > 0 ? 0.2 : 0.42
+            context.timingFunction = CAMediaTimingFunction(controlPoints: 0.34, 1.3, 0.64, 1)
             card.animator().setFrameOrigin(NSPoint(x: x, y: card.frame.minY))
-        }
+        }, completionHandler: { MainActor.assumeIsolated { completion?() } })
     }
 
     // a tucked card leaves a sliver showing at the screen edge
     private func cardX(_ id: UUID?, view: NSView, width: CGFloat) -> CGFloat {
-        let peek: CGFloat = 18
-        if let id, tucked.contains(id) { return placesRight ? width - peek : peek - view.frame.width }
+        if let id, tucked.contains(id) { return placesRight ? width - Self.peek : Self.peek - view.frame.width }
         return placesRight ? width - Self.inset - Self.sideMargin - view.frame.width : Self.inset + Self.sideMargin
     }
 
@@ -130,8 +136,10 @@ final class QuickAccessPanel: NSPanel {
     }
 
     func dismiss(_ item: CaptureItem) {
-        shelf.dismiss(item.id)
-        rebuild()
+        slideOut([item.id]) { [weak self] in
+            self?.shelf.dismiss(item.id)
+            self?.rebuild()
+        }
     }
 
     func dismissAll() {
@@ -139,8 +147,37 @@ final class QuickAccessPanel: NSPanel {
         pendingCaptures.removeAll()
         pendingTimer?.invalidate()
         pendingTimer = nil
-        shelf.dismissAll()
-        rebuild()
+        slideOut(shelf.ids) { [weak self] in
+            self?.shelf.dismissAll()
+            self?.rebuild()
+        }
+    }
+
+    // cards lean in, then leave off their screen edge, a beat apart when several go at once
+    private func slideOut(_ ids: [UUID], then finish: @escaping () -> Void) {
+        let going = ids.filter { cards[$0] != nil && !leaving.contains($0) }
+        guard !going.isEmpty, isVisible, !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion, let width = contentView?.bounds.width else { finish(); return }
+        leaving.formUnion(going)
+        var remaining = going.count
+        for (index, id) in going.enumerated() {
+            guard let card = cards[id] else { continue }
+            let x = placesRight ? width + 12 : -card.frame.width - 12
+            DispatchQueue.main.asyncAfter(deadline: .now() + Double(index) * 0.05) {
+                NSAnimationContext.runAnimationGroup({ context in
+                    context.duration = 0.32
+                    context.timingFunction = CAMediaTimingFunction(controlPoints: 0.36, 0, 0.66, -0.4)
+                    card.animator().setFrameOrigin(NSPoint(x: x, y: card.frame.minY))
+                    card.animator().alphaValue = 0
+                }, completionHandler: {
+                    MainActor.assumeIsolated {
+                        remaining -= 1
+                        guard remaining == 0 else { return }
+                        self.leaving.subtract(going)
+                        finish()
+                    }
+                })
+            }
+        }
     }
 
     func reopenLast() {
@@ -206,7 +243,7 @@ final class QuickAccessPanel: NSPanel {
         let visible = screen?.visibleFrame ?? CGRect(x: 0, y: 0, width: 1024, height: 768)
         // show only as many cards as the screen fits, the footer opens the rest in history
         let shown = Self.cardsThatFit(height: visible.height - Self.endMargin - Self.sideMargin, footer: shelf.ids.count > 1)
-        var views: [(UUID?, NSView)] = shelf.ids.prefix(shown).compactMap { id in captures[id].map { (id, makeCard($0)) } }
+        var views: [(UUID?, NSView)] = shelf.ids.prefix(shown).compactMap { id in captures[id].map { (id, makeCard($0) as NSView) } }
         if shelf.ids.count > 1 { views.append((nil, makeFooter(shown: shown))) }
         // newest card sits closest to the screen corner
         if bottom { views.reverse() }
@@ -221,7 +258,10 @@ final class QuickAccessPanel: NSPanel {
         for (id, view) in views {
             y -= view.frame.height
             view.setFrameOrigin(NSPoint(x: cardX(id, view: view, width: width), y: y))
-            if let id { cards[id] = view }
+            if let id, let card = view as? QuickAccessCard {
+                cards[id] = card
+                card.setTucked(tucked.contains(id), onRight: right, peek: Self.peek, animated: false)
+            }
             container.addSubview(view)
             y -= Self.gap
         }
@@ -246,8 +286,9 @@ final class QuickAccessPanel: NSPanel {
         }
     }
 
-    private func makeCard(_ item: CaptureItem) -> NSView {
+    private func makeCard(_ item: CaptureItem) -> QuickAccessCard {
         let card = QuickAccessCard(size: Self.cardSize, url: item.shareURL(in: library.root))
+        card.onTuckedHover = { [weak self] hovered in self?.slide(item.id, nudge: hovered ? 22 : 0) }
         if let thumbnail = NSImage(contentsOf: item.thumbnail(in: library.root)) {
             card.thumbnail.image = thumbnail
         } else {
@@ -259,6 +300,10 @@ final class QuickAccessPanel: NSPanel {
             switch command {
             case .close: self?.dismiss(item)
             case .closeAll: self?.dismissAll()
+            // a copied or saved capture is done with, so its card leaves
+            case .copy, .save, .saveAs:
+                self?.interact { self?.onCommand?(command, item) }
+                self?.dismiss(item)
             default: self?.interact { self?.onCommand?(command, item) }
             }
         }
@@ -338,7 +383,11 @@ final class QuickAccessPanel: NSPanel {
 final class QuickAccessCard: NSView {
     enum Corner { case topLeft, topRight, bottomLeft, bottomRight }
     let thumbnail: CaptureDragView
+    var onTuckedHover: ((Bool) -> Void)?
     private let overlay = PassthroughView()
+    private let clip = NSView()
+    private let badge = NSView(frame: NSRect(x: 0, y: 0, width: 24, height: 24))
+    private var isTucked = false
     private static let radius: CGFloat = 12
 
     init(size: CGSize, url: URL?) {
@@ -350,7 +399,7 @@ final class QuickAccessCard: NSView {
         layer?.shadowRadius = 9
         layer?.shadowOffset = CGSize(width: 0, height: -3)
         layer?.shadowPath = CGPath(roundedRect: bounds, cornerWidth: Self.radius, cornerHeight: Self.radius, transform: nil)
-        let clip = NSView(frame: bounds)
+        clip.frame = bounds
         clip.wantsLayer = true
         clip.layer?.cornerRadius = Self.radius
         clip.layer?.cornerCurve = .continuous
@@ -368,6 +417,19 @@ final class QuickAccessCard: NSView {
         clip.addSubview(thumbnail)
         clip.addSubview(overlay)
         addSubview(clip)
+        // a pencil chip in the visible sliver marks a capture that is open in the editor
+        badge.wantsLayer = true
+        badge.layer?.backgroundColor = NSColor.glint.cgColor
+        badge.layer?.cornerRadius = 12
+        let pencil = CALayer()
+        pencil.contents = NSImage(systemSymbolName: "pencil", accessibilityDescription: nil)?
+            .withSymbolConfiguration(NSImage.SymbolConfiguration(pointSize: 11, weight: .bold).applying(.init(paletteColors: [.white])))
+        pencil.contentsGravity = .center
+        pencil.contentsScale = NSScreen.main?.backingScaleFactor ?? 2
+        pencil.frame = badge.bounds
+        badge.layer?.addSublayer(pencil)
+        badge.alphaValue = 0
+        addSubview(badge)
         addTrackingArea(NSTrackingArea(rect: .zero, options: [.mouseEnteredAndExited, .activeAlways, .inVisibleRect], owner: self))
     }
 
@@ -400,8 +462,35 @@ final class QuickAccessCard: NSView {
         if bounds.contains(convert(window.mouseLocationOutsideOfEventStream, from: nil)) { overlay.alphaValue = 1 }
     }
 
-    override func mouseEntered(with event: NSEvent) { setHovered(true) }
-    override func mouseExited(with event: NSEvent) { setHovered(false) }
+    override func mouseEntered(with event: NSEvent) { isTucked ? onTuckedHover?(true) : setHovered(true) }
+    override func mouseExited(with event: NSEvent) { isTucked ? onTuckedHover?(false) : setHovered(false) }
+
+    // a tucked card fades back and shows the pencil chip in the part still on screen
+    func setTucked(_ tucked: Bool, onRight: Bool, peek: CGFloat, animated: Bool) {
+        isTucked = tucked
+        badge.setFrameOrigin(NSPoint(x: onRight ? (peek - 24) / 2 : bounds.width - (peek + 24) / 2, y: (bounds.height - 24) / 2))
+        NSAnimationContext.runAnimationGroup { context in
+            context.duration = animated ? 0.3 : 0
+            clip.animator().alphaValue = tucked ? 0.55 : 1
+            badge.animator().alphaValue = tucked ? 1 : 0
+            if tucked { overlay.animator().alphaValue = 0 }
+        }
+    }
+
+    // a quick accent ring when the edited version takes the card's place
+    func flash() {
+        let ring = CABasicAnimation(keyPath: "borderWidth")
+        ring.fromValue = 3
+        ring.toValue = 0.5
+        ring.duration = 0.7
+        ring.timingFunction = CAMediaTimingFunction(name: .easeOut)
+        let color = CABasicAnimation(keyPath: "borderColor")
+        color.fromValue = NSColor.glint.cgColor
+        color.toValue = NSColor.black.withAlphaComponent(0.22).cgColor
+        color.duration = 0.7
+        clip.layer?.add(ring, forKey: "flashWidth")
+        clip.layer?.add(color, forKey: "flashColor")
+    }
 
     func setHovered(_ hovered: Bool) {
         NSAnimationContext.runAnimationGroup { context in
@@ -435,6 +524,7 @@ final class HUDButton: NSButton {
         let label = help ?? title
         let ink = style == .primary ? Self.resolved(.onGlint) : NSColor(white: 0.1, alpha: 1)
         isBordered = false
+        self.title = ""
         focusRingType = .none
         wantsLayer = true
         target = self
@@ -442,12 +532,17 @@ final class HUDButton: NSButton {
         toolTip = label
         setAccessibilityLabel(label)
         if let symbol {
-            image = NSImage(systemSymbolName: symbol, accessibilityDescription: label)?
-                .withSymbolConfiguration(.init(pointSize: 11, weight: .bold))
-                .map { tilt == 0 ? $0 : Self.tilted($0, by: tilt) }
-            imagePosition = .imageOnly
-            contentTintColor = ink
             setFrameSize(NSSize(width: 26, height: 26))
+            // drawn in its own centered layer, the button cell nudges symbols off center
+            let glyph = NSImage(systemSymbolName: symbol, accessibilityDescription: label)?
+                .withSymbolConfiguration(NSImage.SymbolConfiguration(pointSize: 11, weight: .bold).applying(.init(paletteColors: [ink])))
+                .map { tilt == 0 ? $0 : Self.tilted($0, by: tilt) }
+            let icon = CALayer()
+            icon.contents = glyph
+            icon.contentsGravity = .center
+            icon.contentsScale = NSScreen.main?.backingScaleFactor ?? 2
+            icon.frame = bounds
+            layer?.addSublayer(icon)
         } else {
             let font = NSFont.systemFont(ofSize: 12, weight: .semibold)
             attributedTitle = NSAttributedString(string: title, attributes: [.font: font, .foregroundColor: ink])
@@ -483,7 +578,6 @@ final class HUDButton: NSButton {
             image.draw(in: CGRect(x: -image.size.width / 2, y: -image.size.height / 2, width: image.size.width, height: image.size.height))
             return true
         }
-        result.isTemplate = true
         return result
     }
 
