@@ -37,7 +37,11 @@ final class QuickAccessPanel: NSPanel {
     private let library: CaptureLibrary
     private var dismissTimer: Timer?
     private var lastInteraction = Date()
-    private var isDraggingCapture = false
+    private var isDraggingCapture = false {
+        didSet { if !isDraggingCapture, needsRebuild { needsRebuild = false; rebuild() } }
+    }
+    // a swap that landed mid drag waits so the dragged card is not rebuilt out from under it
+    private var needsRebuild = false
     private var pendingCaptures: [CaptureItem] = []
     private var pendingTimer: Timer?
     private var isCaptureSuppressed = false
@@ -70,6 +74,16 @@ final class QuickAccessPanel: NSPanel {
     }
 
     func present(_ item: CaptureItem, replacing old: UUID? = nil) {
+        // a saved edit swaps into its original's slot, still tucked while the editor stays open,
+        // so it never waits behind the pointer like a new card would
+        if let old, shelf.ids.contains(old) {
+            captures[item.id] = item
+            shelf.replace(old, with: item.id)
+            if tucked.remove(old) != nil { tucked.insert(item.id); freshEdits.insert(item.id) }
+            lastInteraction = Date()
+            if isDraggingCapture { needsRebuild = true } else { rebuild() }
+            return
+        }
         if isCaptureSuppressed || (isVisible && (frame.contains(NSEvent.mouseLocation) || isDraggingCapture || NSEvent.pressedMouseButtons != 0)) {
             pendingCaptures.removeAll { $0.id == item.id }
             pendingCaptures.append(item)
@@ -77,11 +91,7 @@ final class QuickAccessPanel: NSPanel {
             return
         }
         captures[item.id] = item
-        // a saved edit takes its original's place, still tucked while the editor stays open
-        if let old, shelf.ids.contains(old) {
-            shelf.replace(old, with: item.id)
-            if tucked.remove(old) != nil { tucked.insert(item.id); freshEdits.insert(item.id) }
-        } else { shelf.insert(item.id) }
+        shelf.insert(item.id)
         lastInteraction = Date()
         rebuild()
         show()
@@ -386,6 +396,7 @@ final class QuickAccessCard: NSView {
     var onTuckedHover: ((Bool) -> Void)?
     private let overlay = PassthroughView()
     private let clip = NSView()
+    private let wash = NSView()
     private let badge = NSView(frame: NSRect(x: 0, y: 0, width: 24, height: 24))
     private var isTucked = false
     private static let radius: CGFloat = 12
@@ -414,7 +425,13 @@ final class QuickAccessCard: NSView {
         overlay.layer?.backgroundFilters = [CIFilter(name: "CIGaussianBlur", parameters: [kCIInputRadiusKey: 7])].compactMap { $0 }
         overlay.layer?.backgroundColor = NSColor.black.withAlphaComponent(0.22).cgColor
         overlay.alphaValue = 0
+        wash.frame = bounds
+        wash.wantsLayer = true
+        wash.layer?.backgroundColor = NSColor.white.withAlphaComponent(0.45).cgColor
+        wash.alphaValue = 0
+        clip.layerUsesCoreImageFilters = true
         clip.addSubview(thumbnail)
+        clip.addSubview(wash)
         clip.addSubview(overlay)
         addSubview(clip)
         // a pencil chip in the visible sliver marks a capture that is open in the editor
@@ -465,13 +482,14 @@ final class QuickAccessCard: NSView {
     override func mouseEntered(with event: NSEvent) { isTucked ? onTuckedHover?(true) : setHovered(true) }
     override func mouseExited(with event: NSEvent) { isTucked ? onTuckedHover?(false) : setHovered(false) }
 
-    // a tucked card fades back and shows the pencil chip in the part still on screen
+    // a tucked card turns light gray and shows the pencil chip in the part still on screen
     func setTucked(_ tucked: Bool, onRight: Bool, peek: CGFloat, animated: Bool) {
         isTucked = tucked
         badge.setFrameOrigin(NSPoint(x: onRight ? (peek - 24) / 2 : bounds.width - (peek + 24) / 2, y: (bounds.height - 24) / 2))
+        thumbnail.layer?.filters = tucked ? [CIFilter(name: "CIColorControls", parameters: [kCIInputSaturationKey: 0])].compactMap { $0 } : nil
         NSAnimationContext.runAnimationGroup { context in
             context.duration = animated ? 0.3 : 0
-            clip.animator().alphaValue = tucked ? 0.55 : 1
+            wash.animator().alphaValue = tucked ? 1 : 0
             badge.animator().alphaValue = tucked ? 1 : 0
             if tucked { overlay.animator().alphaValue = 0 }
         }

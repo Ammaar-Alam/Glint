@@ -139,7 +139,8 @@ final class SelectionController {
                 self.continuation = continuation
                 guard !NSScreen.screens.isEmpty else { finish(nil); return }
                 for screen in NSScreen.screens {
-                    let panel = SelectionPanel(contentRect: screen.frame, styleMask: [.borderless], backing: .buffered, defer: false)
+                    // takes keys and pointer moves without waiting for the app to activate, which a hotkey can't force
+                    let panel = SelectionPanel(contentRect: screen.frame, styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
                     panel.level = Self.overlayLevel
                     panel.isOpaque = false
                     panel.backgroundColor = .clear
