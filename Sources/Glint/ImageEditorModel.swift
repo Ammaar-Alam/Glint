@@ -17,7 +17,8 @@ private struct ImageClipboardContents: @unchecked Sendable {
 @MainActor
 final class ImageEditorModel: ObservableObject {
     @Published private(set) var document: ImageDocument?
-    @Published private(set) var preview: CGImage?
+    private(set) var preview: CGImage?
+    private(set) var previewCanvasSize = CGSize.zero
     @Published var selectedIDs: Set<UUID> = []
     @Published var tool: AnnotationTool = .arrow { didSet { toolChanged(from: oldValue) } }
     // crop edits a draft over the whole image and applies it when the crop tool is left
@@ -56,6 +57,7 @@ final class ImageEditorModel: ObservableObject {
     private var renderTask: Task<Void, Never>?
     private var ocrTask: Task<Void, Never>?
     private var renderRevision = 0
+    private var isGesturing = false
     private var isClosed = false
     private var textBoxes: [CGRect] = []
     private var backgroundLoadID = UUID()
@@ -210,15 +212,18 @@ final class ImageEditorModel: ObservableObject {
         adjustmentStart = nil
         if document != start { registerUndo(start, action: adjustmentAction) }
         canvas?.updateCanvasSize()
+        refreshPreview()
     }
 
     func updateGesture(_ next: ImageDocument) {
+        isGesturing = true
         document = next
         refreshPreview()
     }
 
     func finishGesture(from previous: ImageDocument, action: String) {
-        guard document != previous else { return }
+        guard document != previous || isGesturing else { return }
+        isGesturing = false
         do { if let document { _ = try document.validated() } }
         catch { document = previous; errorMessage = error.localizedDescription }
         if document != previous { registerUndo(previous, action: action) }
@@ -226,6 +231,7 @@ final class ImageEditorModel: ObservableObject {
     }
 
     func cancelGesture(restoring previous: ImageDocument) {
+        isGesturing = false
         document = previous
         refreshPreview()
     }
@@ -255,20 +261,28 @@ final class ImageEditorModel: ObservableObject {
         guard !isClosed, let saved = try? snapshot(), let shown = displayDocument else { return }
         let contents = ImageProjectContents(document: shown, source: saved.source, insertedImages: saved.insertedImages)
         let revision = renderRevision
-        let maximumDimension: CGFloat? = (canvas?.magnification ?? 0) >= 0.9 ? nil : 2200
+        let isInteracting = isAdjusting || isGesturing
+        let maximumDimension: CGFloat?
+        if isInteracting, let canvas, let scroll = canvas.enclosingScrollView {
+            // use screen points while dragging, then restore the settled preview quality
+            maximumDimension = min(2200, max(shown.canvasSize.width, shown.canvasSize.height) * canvas.magnification,
+                                   max(scroll.contentSize.width, scroll.contentSize.height))
+        } else {
+            maximumDimension = (canvas?.magnification ?? 0) >= 0.9 ? nil : 2200
+        }
         // keep one render in flight and pick up the newest gesture state when it finishes
         renderTask = Task.detached(priority: .userInitiated) { [weak self] in
-            let result = Result { try ImageRenderer.render(contents, maximumDimension: maximumDimension) }
+            let result = Result { try ImageRenderer.render(contents, maximumDimension: maximumDimension,
+                                                          interpolationQuality: isInteracting ? .medium : .high) }
             guard !Task.isCancelled else { return }
             await MainActor.run { [weak self] in
                 guard let self, !self.isClosed else { return }
                 self.renderTask = nil
                 switch result {
                 case .success(let image):
-                    if self.displayDocument?.canvasSize == contents.document.canvasSize {
-                        self.preview = image
-                        self.canvas?.updateCanvasSize()
-                    }
+                    self.previewCanvasSize = contents.document.canvasSize
+                    self.preview = image
+                    self.canvas?.updateCanvasSize()
                 case .failure(let error):
                     if revision == self.renderRevision { self.errorMessage = error.localizedDescription }
                 }

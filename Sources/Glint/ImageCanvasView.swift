@@ -36,7 +36,7 @@ final class ImageCanvasView: NSView {
         setAccessibilityRole(.image)
         setAccessibilityHelp("Choose a tool to annotate. Use V to select, drag corner handles to resize, and Space to pan.")
         observation = model.objectWillChange.sink { [weak self] in
-            DispatchQueue.main.async { self?.needsDisplay = true }
+            self?.needsDisplay = true
         }
     }
 
@@ -147,7 +147,9 @@ final class ImageCanvasView: NSView {
                 }
             }
         }
-        if let preview = model.preview { ImageRenderer.drawImage(preview, in: imageRect, context: context) }
+        if let preview = model.preview {
+            ImageRenderer.drawImage(preview, in: CGRect(origin: imageRect.origin, size: model.previewCanvasSize), context: context)
+        }
         context.restoreGState()
         // a hairline keeps light captures from melting into the backdrop
         context.setStrokeColor(CGColor(gray: 0, alpha: 0.14))

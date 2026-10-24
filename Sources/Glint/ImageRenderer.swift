@@ -3,12 +3,14 @@ import CoreImage
 import CoreText
 
 enum ImageRenderer {
-    static func render(_ contents: ImageProjectContents, maximumDimension: CGFloat? = nil) throws -> CGImage {
+    static func render(_ contents: ImageProjectContents, maximumDimension: CGFloat? = nil,
+                       interpolationQuality: CGInterpolationQuality = .high) throws -> CGImage {
         try Task.checkCancellation()
         let document = try contents.document.validated()
         let scale = maximumDimension.map { min(document.outputScale, $0 / max(document.canvasSize.width, document.canvasSize.height)) } ?? document.outputScale
         let crop = document.cropRect
         let work = try bitmap(size: crop.size, scale: scale)
+        work.interpolationQuality = interpolationQuality
         work.scaleBy(x: scale, y: scale)
         work.translateBy(x: -crop.minX, y: -crop.minY)
         try Task.checkCancellation()
