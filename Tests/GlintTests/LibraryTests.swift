@@ -65,6 +65,17 @@ final class LibraryTests: XCTestCase {
         XCTAssertEqual(shelf.ids, [second])
     }
 
+    func testEditedCaptureTakesItsOriginalsPlace() {
+        let first = UUID(), second = UUID(), edited = UUID(), gone = UUID(), fresh = UUID()
+        var shelf = ShelfState()
+        shelf.insert(first); shelf.insert(second)
+        shelf.replace(first, with: edited)
+        XCTAssertEqual(shelf.ids, [second, edited])
+        // an original dismissed meanwhile lets the edit arrive as a new card
+        shelf.replace(gone, with: fresh)
+        XCTAssertEqual(shelf.ids, [fresh, second, edited])
+    }
+
     func testExportReplacesFileAtomicallyAndFailureKeepsExistingDestination() throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("Glint-export-test-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
@@ -156,9 +167,9 @@ final class LibraryTests: XCTestCase {
     @MainActor
     func testQuickAccessFitsShortScreens() {
         XCTAssertEqual(QuickAccessPanel.cardsThatFit(height: 1000, footer: true), 4)
-        XCTAssertEqual(QuickAccessPanel.cardsThatFit(height: 600, footer: true), 3)
+        XCTAssertEqual(QuickAccessPanel.cardsThatFit(height: 500, footer: true), 3)
         XCTAssertEqual(QuickAccessPanel.cardsThatFit(height: 100, footer: false), 1)
-        let three = 14 * 2 + 3 * 146 + 2 * 10 + 22 + 10
-        XCTAssertLessThanOrEqual(three, 600)
+        let three = 14 * 2 + 3 * 122 + 2 * 10 + 22 + 10
+        XCTAssertLessThanOrEqual(three, 500)
     }
 }
