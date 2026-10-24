@@ -46,11 +46,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var recordingHiddenWindows: [NSWindow] = []
 
     func applicationDidFinishLaunching(_ notification: Notification) {
-        // one Glint at a time, a second copy hands over to the one already running before it registers anything
+        // one Glint at a time: the earliest launched copy stays, ties go to the lower process id,
+        // so copies starting together all pick the same survivor and the rest hand over to it
         let me = NSRunningApplication.current
-        if let running = NSRunningApplication.runningApplications(withBundleIdentifier: Bundle.main.bundleIdentifier ?? "")
-            .first(where: { $0.processIdentifier != me.processIdentifier && !$0.isTerminated }) {
-            if let url = running.bundleURL { NSWorkspace.shared.openApplication(at: url, configuration: NSWorkspace.OpenConfiguration()) }
+        func seniority(_ app: NSRunningApplication) -> (Date, pid_t) { (app.launchDate ?? .distantFuture, app.processIdentifier) }
+        if let survivor = NSRunningApplication.runningApplications(withBundleIdentifier: Bundle.main.bundleIdentifier ?? "")
+            .filter({ !$0.isTerminated })
+            .min(by: { seniority($0) < seniority($1) }),
+           survivor.processIdentifier != me.processIdentifier {
+            if let url = survivor.bundleURL { NSWorkspace.shared.openApplication(at: url, configuration: NSWorkspace.OpenConfiguration()) }
             NSApp.terminate(nil)
             return
         }
