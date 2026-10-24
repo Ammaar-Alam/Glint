@@ -589,7 +589,7 @@ final class ImageCanvasView: NSView {
                 model.setColor(AnnotationColor.palette[digit - 1])
             }
             else if let tool = AnnotationTool.allCases.first(where: { $0.keyboardKey == key }) {
-                if tool == .crop { model.select(nil) }
+                if tool != .select { model.select(nil) }
                 model.tool = tool
                 window?.invalidateCursorRects(for: self)
             } else { super.keyDown(with: event) }
