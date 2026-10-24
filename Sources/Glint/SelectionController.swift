@@ -97,8 +97,6 @@ final class SelectionController {
     private static let placementKey = "captureBarPlacement"
     private var showsLoupe = false
     private var toolbar: SelectionPanel?
-    private var fixedSize: CGSize?
-    private var aspectRatio: CGFloat? { CaptureBarModel.ratios[bar.ratio].1 }
     private var isWindowSelection: Bool { mode == .window }
     private var start: CGPoint?
     private var drag: (origin: CGRect, from: CGPoint, edges: (x: Int, y: Int))?
@@ -233,7 +231,6 @@ final class SelectionController {
             move(to: point, modifiers: [])
             captureSelection()
         } else if let edges = grip(at: point), let selection {
-            if edges != (0, 0) { fixedSize = nil }
             drag = (selection, point, edges)
             updateCursor(at: point)
         } else {
@@ -256,12 +253,10 @@ final class SelectionController {
             selection = NSScreen.screens.first { $0.frame.contains(point) }?.frame
         } else if let drag {
             let delta = CGVector(dx: point.x - drag.from.x, dy: point.y - drag.from.y)
-            let ratio = modifiers.contains(.shift) ? drag.origin.width / max(1, drag.origin.height) : aspectRatio
+            let ratio = modifiers.contains(.shift) ? drag.origin.width / max(1, drag.origin.height) : nil
             selection = CaptureGeometry.adjusted(drag.origin, edges: drag.edges, by: delta, ratio: ratio)
-        } else if let fixedSize, !regionSelectionLocked || start != nil {
-            selection = CGRect(x: point.x, y: point.y - fixedSize.height, width: fixedSize.width, height: fixedSize.height)
         } else if let start {
-            selection = CaptureGeometry.rectangle(from: start, to: point, ratio: modifiers.contains(.shift) ? 1 : aspectRatio)
+            selection = CaptureGeometry.rectangle(from: start, to: point, ratio: modifiers.contains(.shift) ? 1 : nil)
         }
         updateCursor(at: point)
         updateViews(pointer: point)
@@ -316,14 +311,13 @@ final class SelectionController {
             if recording, ![.area, .fullScreen, .window].contains(mode) { changeMode(.area) }
             else { updateViews(pointer: lastPointer) }
         }
-        bar.onSize = { [weak self] size, editedWidth in self?.changeDimensions(size, editedWidth: editedWidth) }
-        bar.onRatio = { [weak self] in self?.changeRatio($0) }
         bar.onCapture = { [weak self] in self?.captureSelection() }
         bar.onCancel = { [weak self] in self?.finish(nil) }
-        bar.onEditingEnd = { [weak self] in self?.focusOverlay() }
         bar.onResize = { [weak self] in self?.placeToolbar($0) }
         let host = FirstMouseHostingView(rootView: CaptureBar(model: bar))
         panel.contentView = host
+        // placed while invisible, then fades in where it belongs instead of sliding across the screen
+        panel.alphaValue = 0
         placeToolbar(host.fittingSize)
         panel.orderFrontRegardless()
     }
@@ -359,8 +353,8 @@ final class SelectionController {
         guard toolbar.frame != target || toolbar.alphaValue < 1 else { return }
         if toolbar.alphaValue < 1 { toolbar.setFrame(target, display: true) }
         NSAnimationContext.runAnimationGroup { context in
-            context.duration = 0.16
-            context.timingFunction = CAMediaTimingFunction(name: .easeOut)
+            context.duration = toolbar.alphaValue < 1 ? 0.14 : 0.2
+            context.timingFunction = CAMediaTimingFunction(controlPoints: 0.2, 0.9, 0.3, 1)
             if toolbar.alphaValue >= 1 { toolbar.animator().setFrame(target, display: true) }
             toolbar.animator().alphaValue = 1
         }
@@ -377,37 +371,7 @@ final class SelectionController {
         move(to: lastPointer, modifiers: [])
     }
 
-    private func changeDimensions(_ size: CGSize, editedWidth: Bool) {
-        var width = size.width
-        var height = size.height
-        if let aspectRatio {
-            if editedWidth { height = width / aspectRatio }
-            else { width = height * aspectRatio }
-        }
-        guard width.isFinite, height.isFinite, (2...32_768).contains(width), (2...32_768).contains(height) else { NSSound.beep(); return }
-        regionSelectionLocked = selection != nil
-        let fixed = CGSize(width: width.rounded(), height: height.rounded())
-        fixedSize = fixed
-        let origin = selection.map { CGPoint(x: $0.minX, y: $0.maxY - fixed.height) } ?? CGPoint(x: lastPointer.x, y: lastPointer.y - fixed.height)
-        selection = CGRect(origin: origin, size: fixed)
-        updateViews(pointer: lastPointer)
-    }
-
-    private func changeRatio(_ index: Int) {
-        guard CaptureBarModel.ratios.indices.contains(index) else { return }
-        bar.ratio = index
-        fixedSize = nil
-        if let ratio = aspectRatio, var rect = selection {
-            let height = rect.width / ratio
-            rect.origin.y = rect.maxY - height
-            rect.size.height = height
-            selection = rect
-        }
-        updateViews(pointer: lastPointer)
-    }
-
     private func captureSelection() {
-        bar.commitSize()
         let target: CaptureSelection
         if isWindowSelection, let selectedWindow { target = .window(selectedWindow) }
         else if !isWindowSelection, let selection, selection.width >= 2, selection.height >= 2 {
@@ -455,8 +419,6 @@ final class SelectionController {
             view.showsMagnifier = showsLoupe && selecting && !isWindowSelection && mode != .fullScreen && view.screenFrame.contains(pointer)
             view.refresh()
         }
-        let size = selection.map { CGSize(width: $0.width.rounded(), height: $0.height.rounded()) }
-        if bar.size != size { bar.size = size }
         layoutToolbar(hidden: start != nil || drag != nil)
     }
 
@@ -796,40 +758,22 @@ private final class LoupeView: NSView {
 
 @MainActor @Observable
 final class CaptureBarModel {
-    static let ratios: [(String, CGFloat?)] = [("Free", nil), ("1:1", 1), ("4:3", 4.0 / 3), ("16:9", 16.0 / 9), ("9:16", 9.0 / 16), ("3:2", 1.5)]
     let allInOne: Bool
     let allowsRecording: Bool
     var mode: CaptureMode = .area
     var recording = false
     var options = RecordingOptions.saved()
-    var size: CGSize?
-    var ratio = 0
-    var widthText = ""
-    var heightText = ""
     // a frozen screen already ran its countdown before the bar opened
     var timerApplies = true
-    // the field being typed in, applied on Return or before capturing
-    @ObservationIgnored var editedWidth: Bool?
     @ObservationIgnored var onMode: (CaptureMode) -> Void = { _ in }
     @ObservationIgnored var onRecording: (Bool) -> Void = { _ in }
-    @ObservationIgnored var onSize: (CGSize, Bool) -> Void = { _, _ in }
-    @ObservationIgnored var onRatio: (Int) -> Void = { _ in }
     @ObservationIgnored var onCapture: () -> Void = {}
     @ObservationIgnored var onCancel: () -> Void = {}
-    @ObservationIgnored var onEditingEnd: () -> Void = {}
     @ObservationIgnored var onResize: (CGSize) -> Void = { _ in }
 
     init(allInOne: Bool, allowsRecording: Bool) {
         self.allInOne = allInOne
         self.allowsRecording = allowsRecording
-    }
-
-    var editsSize: Bool { mode != .window && mode != .fullScreen }
-
-    func commitSize() {
-        guard let editedWidth else { return }
-        self.editedWidth = nil
-        onSize(CGSize(width: Double(widthText) ?? 0, height: Double(heightText) ?? 0), editedWidth)
     }
 }
 
@@ -839,48 +783,21 @@ struct CaptureBar: View {
 
     private var modes: [CaptureMode] { model.recording ? [.area, .fullScreen, .window] : [.area, .fullScreen, .window, .scrolling, .text] }
 
-    // a small panel: what to do, how to frame it, then go; everything rarer sits in one menu
+    // what to capture, how, then go, with every choice in plain view
     var body: some View {
-        VStack(spacing: 0) {
-            HStack(spacing: 8) {
-                if model.allowsRecording {
-                    Segmented {
-                        kind("Screenshot", symbol: "camera", selected: !model.recording) { model.onRecording(false) }
-                        kind("Record", symbol: "record.circle", selected: model.recording) { model.onRecording(true) }
-                    }
-                }
-                Spacer(minLength: 8)
-                MenuButton(help: "Options", items: options) { Image(systemName: "ellipsis") }
-                tool("xmark", help: "Close", action: model.onCancel)
-            }
-            .padding(.bottom, 12)
-            HStack(spacing: 4) {
-                ForEach(modes) { mode in
-                    Button { model.onMode(mode) } label: {
-                        VStack(spacing: 6) {
-                            Image(systemName: mode.symbol).font(.system(size: 17, weight: .medium))
-                            Text(name(mode)).font(.system(size: 11, weight: .medium))
-                        }
-                        .frame(maxWidth: .infinity)
-                    }
-                    .buttonStyle(ToolButtonStyle(selected: model.mode == mode, size: CGSize(width: 74, height: 58)))
-                    .help(name(mode))
-                    .accessibilityAddTraits(model.mode == mode ? .isSelected : [])
-                }
-            }
+        VStack(alignment: .leading, spacing: 0) {
+            header
+            HStack(spacing: 4) { ForEach(modes) { modeTile($0) } }
             Divider().padding(.vertical, 12)
-            HStack(spacing: 8) {
-                if model.mode != .window { SelectionSizeFields(model: model) }
-                if model.recording { RecordingBarControls(options: $model.options) }
-                Spacer(minLength: 8)
-                Button(action: model.onCapture) {
-                    if model.recording { Label("Record", systemImage: "record.circle") } else { Text("Capture") }
-                }
-                .buttonStyle(PrimaryButtonStyle())
+            if model.recording {
+                RecordingBarControls(options: $model.options)
+                    .padding(.bottom, 12)
+                    .transition(.opacity)
             }
+            footer
         }
         .padding(14)
-        .frame(width: model.recording ? 470 : 420)
+        .frame(width: 470)
         .background(Color.white, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
         .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous).strokeBorder(Color.black.opacity(0.08)))
         .shadow(color: .black.opacity(0.18), radius: 18, y: 6)
@@ -891,6 +808,52 @@ struct CaptureBar: View {
         .onGeometryChange(for: CGSize.self) { $0.size } action: { model.onResize($0) }
     }
 
+    private var header: some View {
+        HStack(spacing: 8) {
+            if model.allowsRecording {
+                Segmented {
+                    kind("Screenshot", symbol: "camera", selected: !model.recording) { model.onRecording(false) }
+                    kind("Record", symbol: "record.circle", selected: model.recording) { model.onRecording(true) }
+                }
+            }
+            Spacer(minLength: 8)
+            tool("xmark", help: "Close", action: model.onCancel)
+        }
+        .padding(.bottom, 12)
+    }
+
+    private func modeTile(_ mode: CaptureMode) -> some View {
+        Button { model.onMode(mode) } label: {
+            VStack(spacing: 6) {
+                Image(systemName: mode.symbol).font(.system(size: 17, weight: .medium))
+                Text(name(mode)).font(.system(size: 11, weight: .medium))
+            }
+            .frame(maxWidth: .infinity)
+        }
+        .buttonStyle(ToolButtonStyle(selected: model.mode == mode, size: CGSize(width: 0, height: 58)))
+        .help(name(mode))
+        .accessibilityAddTraits(model.mode == mode ? .isSelected : [])
+    }
+
+    private var footer: some View {
+        HStack(spacing: 8) {
+            if model.recording {
+                Text("Countdown").font(.system(size: 12, weight: .medium)).foregroundStyle(.secondary)
+                SegmentedChoice(choices: Self.seconds, selection: $model.options.countdown)
+            } else if model.timerApplies {
+                Text("Timer").font(.system(size: 12, weight: .medium)).foregroundStyle(.secondary)
+                SegmentedChoice(choices: Self.seconds, selection: $delay)
+            }
+            Spacer(minLength: 8)
+            Button(action: model.onCapture) {
+                if model.recording { Label("Record", systemImage: "record.circle") } else { Text("Capture") }
+            }
+            .buttonStyle(PrimaryButtonStyle())
+        }
+    }
+
+    private static let seconds: [(String, Int)] = [("Off", 0), ("3s", 3), ("5s", 5), ("10s", 10)]
+
     private func kind(_ title: String, symbol: String, selected: Bool, action: @escaping () -> Void) -> some View {
         Button(action: action) {
             Label(title, systemImage: symbol).font(.system(size: 12, weight: .semibold)).padding(.horizontal, 10)
@@ -898,32 +861,6 @@ struct CaptureBar: View {
         .buttonStyle(ToolButtonStyle(selected: selected, size: CGSize(width: 0, height: 26), tint: .primary))
         .fixedSize()
         .accessibilityAddTraits(selected ? .isSelected : [])
-    }
-
-    private func options() -> [NSMenuItem] {
-        var items: [NSMenuItem] = []
-        if model.editsSize {
-            items.append(Self.submenu("Aspect Ratio", CaptureBarModel.ratios.enumerated().map { ($0.element.0, $0.offset) }, selected: model.ratio) { model.onRatio($0) })
-        }
-        if model.recording {
-            items.append(Self.submenu("Countdown", [("Off", 0), ("3 Seconds", 3), ("5 Seconds", 5), ("10 Seconds", 10)], selected: model.options.countdown) { model.options.countdown = $0 })
-            items += RecordingBarControls.menu($model.options)
-        } else if model.allInOne, model.timerApplies {
-            items.append(Self.submenu("Timer", [("Off", 0), ("3 Seconds", 3), ("5 Seconds", 5), ("10 Seconds", 10)], selected: delay) { delay = $0 })
-        }
-        return items
-    }
-
-    static func submenu(_ title: String, _ choices: [(String, Int)], selected: Int, choose: @escaping (Int) -> Void) -> NSMenuItem {
-        let item = NSMenuItem(title: title, action: nil, keyEquivalent: "")
-        let menu = NSMenu()
-        for (name, value) in choices {
-            let choice = HandlerMenuItem(name) { choose(value) }
-            choice.state = selected == value ? .on : .off
-            menu.addItem(choice)
-        }
-        item.submenu = menu
-        return item
     }
 
     private func tool(_ symbol: String, help: String, selected: Bool = false, segment: Bool = false, action: @escaping () -> Void) -> some View {
@@ -943,78 +880,5 @@ struct CaptureBar: View {
         case .text: return "Text"
         default: return mode.title
         }
-    }
-}
-
-private struct SelectionSizeFields: View {
-    @Bindable var model: CaptureBarModel
-    @FocusState private var focused: Field?
-
-    private enum Field { case width, height }
-
-    var body: some View {
-        HStack(spacing: 4) {
-            if model.editsSize {
-                field($model.widthText, .width, label: "Width")
-                Text("×").font(.system(size: 11)).foregroundStyle(.secondary)
-                field($model.heightText, .height, label: "Height")
-            } else {
-                Text(verbatim: model.size.map { "\(Int($0.width)) × \(Int($0.height))" } ?? "–")
-                    .font(.system(size: 12, weight: .medium).monospacedDigit())
-                    .foregroundStyle(.secondary)
-                    .frame(minWidth: 96)
-            }
-        }
-        .onChange(of: model.size, initial: true) { sync() }
-    }
-
-    // each box fills with the share of the screen the selection spans, digits roll as it grows
-    private func field(_ text: Binding<String>, _ field: Field, label: String) -> some View {
-        let editing = focused == field
-        let screen = (NSScreen.screens.first { $0.frame.contains(NSEvent.mouseLocation) } ?? NSScreen.main)?.frame.size ?? CGSize(width: 1, height: 1)
-        let share = model.size.map { field == .width ? $0.width / screen.width : $0.height / screen.height } ?? 0
-        return TextField("", text: text)
-            .textFieldStyle(.plain)
-            .multilineTextAlignment(.center)
-            .font(.system(size: 12, weight: .semibold).monospacedDigit())
-            .foregroundStyle(editing ? Color.primary : .clear)
-            .frame(width: 50, height: 24)
-            .overlay {
-                if !editing {
-                    Text(verbatim: text.wrappedValue.isEmpty ? "–" : text.wrappedValue)
-                        .font(.system(size: 12, weight: .semibold).monospacedDigit())
-                        .foregroundStyle(text.wrappedValue.isEmpty ? Color.secondary.opacity(0.6) : Color.primary)
-                        .contentTransition(.numericText())
-                        .animation(.easeOut(duration: 0.12), value: text.wrappedValue)
-                        .allowsHitTesting(false)
-                }
-            }
-            .background(alignment: .leading) {
-                GeometryReader { proxy in
-                    ZStack(alignment: .leading) {
-                        Color.primary.opacity(editing ? 0.1 : 0.05)
-                        Color.glint.opacity(0.28).frame(width: proxy.size.width * min(1, max(0, share)))
-                    }
-                }
-                .clipShape(RoundedRectangle(cornerRadius: Radius.control - 1, style: .continuous))
-                .animation(.easeOut(duration: 0.15), value: share)
-            }
-            .overlay(RoundedRectangle(cornerRadius: Radius.control - 1, style: .continuous)
-                .strokeBorder(editing ? Color.glint : .clear))
-            .focused($focused, equals: field)
-            .onChange(of: text.wrappedValue) { if focused == field { model.editedWidth = field == .width } }
-            .onSubmit {
-                focused = nil
-                model.commitSize()
-                sync()
-                model.onEditingEnd()
-            }
-            .accessibilityLabel(label)
-    }
-
-    private func sync() {
-        guard focused == nil else { return }
-        model.widthText = model.size.map { String(Int($0.width)) } ?? ""
-        model.heightText = model.size.map { String(Int($0.height)) } ?? ""
     }
 }

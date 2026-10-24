@@ -389,6 +389,25 @@ struct Segmented<Content: View>: View {
     }
 }
 
+// a short row of exclusive text choices
+struct SegmentedChoice<Value: Hashable>: View {
+    let choices: [(String, Value)]
+    @Binding var selection: Value
+
+    var body: some View {
+        Segmented {
+            ForEach(choices, id: \.1) { title, value in
+                Button(title) { selection = value }
+                    .font(.system(size: 12, weight: .semibold))
+                    .padding(.horizontal, 8)
+                    .buttonStyle(ToolButtonStyle(selected: selection == value, size: CGSize(width: 0, height: 24), tint: .primary))
+                    .fixedSize()
+                    .accessibilityAddTraits(selection == value ? .isSelected : [])
+            }
+        }
+    }
+}
+
 // tool button that opens a native menu, keeping the bar's hover and sizing
 struct MenuButton<Label: View>: View {
     let help: String
