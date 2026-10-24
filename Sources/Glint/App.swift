@@ -761,7 +761,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let height = host.fittingSize.height
         host.sizingOptions = []
         panel.contentView = host
-        let area = Self.recordingArea(target)
+        let (area, outlined) = Self.recordingArea(target)
         let screen = area.flatMap { area in NSScreen.screens.first { $0.frame.contains(CGPoint(x: area.midX, y: area.midY)) } }
             ?? NSScreen.screens.first { $0.frame.contains(NSEvent.mouseLocation) } ?? NSScreen.main
         if let screen {
@@ -770,7 +770,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             let bounds = screen.visibleFrame
             let origin = area.map { CaptureGeometry.attach(size, to: $0, within: bounds) } ?? CGPoint(x: bounds.midX - size.width / 2, y: bounds.minY + 8)
             panel.setFrame(CGRect(origin: CGPoint(x: origin.x.rounded(), y: origin.y.rounded()), size: size), display: false)
-            showRecordingFrame(area: area, on: screen)
+            showRecordingFrame(area: outlined ? area : nil, on: screen)
         }
         panel.level = NSWindow.Level(rawValue: NSWindow.Level.floating.rawValue + 1)
         recordingPanel = panel
@@ -830,12 +830,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
     }
 
-    // a region or window in screen coordinates, nil when the whole display is recorded
-    private static func recordingArea(_ target: CaptureSelection) -> CGRect? {
+    // what is recorded in screen coordinates, and whether it gets an outline
+    // full screens pick the display but need no outline, windows can move so they are not outlined
+    private static func recordingArea(_ target: CaptureSelection) -> (CGRect?, outlined: Bool) {
         let primaryHeight = NSScreen.screens.first?.frame.height ?? 0
         switch target {
-        case .region(let rect, let mode): return mode == .fullScreen ? nil : CaptureGeometry.cocoaRect(fromQuartz: rect, primaryHeight: primaryHeight)
-        case .window(let window): return CaptureGeometry.cocoaRect(fromQuartz: window.frame, primaryHeight: primaryHeight)
+        case .region(let rect, let mode): return (CaptureGeometry.cocoaRect(fromQuartz: rect, primaryHeight: primaryHeight), mode != .fullScreen)
+        case .window(let window): return (CaptureGeometry.cocoaRect(fromQuartz: window.frame, primaryHeight: primaryHeight), false)
         case .record(let inner, _): return recordingArea(inner)
         }
     }
@@ -848,6 +849,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         panel.backgroundColor = .clear
         panel.hasShadow = false
         panel.ignoresMouseEvents = true
+        panel.hidesOnDeactivate = false
         panel.isReleasedWhenClosed = false
         panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary]
         let local = area.map { CGRect(x: $0.minX - screen.frame.minX, y: screen.frame.maxY - $0.maxY, width: $0.width, height: $0.height) }
