@@ -140,6 +140,9 @@ final class QuickAccessPanel: NSPanel {
     private static let gap: CGFloat = 10
     // room for card shadows inside the transparent panel
     private static let inset: CGFloat = 14
+    // cards float well clear of the screen corner, scaled with their size
+    private static var sideMargin: CGFloat { (cardSize.height * 0.35 - inset).rounded() }
+    private static var endMargin: CGFloat { (cardSize.height * 0.85 - inset).rounded() }
 
     static func cardsThatFit(height: CGFloat, footer: Bool, scale: CGFloat = cardScale) -> Int {
         let footerHeight = footer ? HUDButton.compactHeight + gap : 0
@@ -162,7 +165,7 @@ final class QuickAccessPanel: NSPanel {
         let screen = (isVisible ? self.screen : nil) ?? preferred ?? NSScreen.main ?? NSScreen.screens.first
         let visible = screen?.visibleFrame ?? CGRect(x: 0, y: 0, width: 1024, height: 768)
         // show only as many cards as the screen fits, the footer opens the rest in history
-        let shown = Self.cardsThatFit(height: visible.height - 56, footer: shelf.ids.count > 1)
+        let shown = Self.cardsThatFit(height: visible.height - Self.endMargin - Self.sideMargin, footer: shelf.ids.count > 1)
         var views: [NSView] = shelf.ids.prefix(shown).compactMap { id in captures[id].map(makeCard) }
         if shelf.ids.count > 1 { views.append(makeFooter(shown: shown)) }
         // newest card sits closest to the screen corner
@@ -179,9 +182,8 @@ final class QuickAccessPanel: NSPanel {
             y -= Self.gap
         }
         contentView = container
-        // cards sit well inside the screen corner, clear of the dock and the edge
-        let x = right ? visible.maxX - width - 16 : visible.minX + 16
-        let originY = bottom ? visible.minY + 40 : visible.maxY - min(height, visible.height) - 16
+        let x = right ? visible.maxX - width - Self.sideMargin : visible.minX + Self.sideMargin
+        let originY = bottom ? visible.minY + Self.endMargin : visible.maxY - min(height, visible.height) - Self.sideMargin
         setFrame(CGRect(x: x, y: originY, width: width, height: min(height, visible.height)), display: true)
     }
 
