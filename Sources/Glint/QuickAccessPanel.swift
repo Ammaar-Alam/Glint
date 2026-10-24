@@ -162,7 +162,7 @@ final class QuickAccessPanel: NSPanel {
         let screen = (isVisible ? self.screen : nil) ?? preferred ?? NSScreen.main ?? NSScreen.screens.first
         let visible = screen?.visibleFrame ?? CGRect(x: 0, y: 0, width: 1024, height: 768)
         // show only as many cards as the screen fits, the footer opens the rest in history
-        let shown = Self.cardsThatFit(height: visible.height, footer: shelf.ids.count > 1)
+        let shown = Self.cardsThatFit(height: visible.height - 56, footer: shelf.ids.count > 1)
         var views: [NSView] = shelf.ids.prefix(shown).compactMap { id in captures[id].map(makeCard) }
         if shelf.ids.count > 1 { views.append(makeFooter(shown: shown)) }
         // newest card sits closest to the screen corner
