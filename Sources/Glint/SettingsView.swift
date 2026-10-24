@@ -261,6 +261,10 @@ private struct GeneralPane: View {
                 }
             ToggleRow("Show menu bar icon", caption: showMenuBarIcon ? nil : "Open Glint again to get back here.", isOn: $showMenuBarIcon)
             ToggleRow("Play sounds", isOn: $sound)
+            ToggleRow("Check for updates", isOn: Binding(get: { Updates.controller.updater.automaticallyChecksForUpdates },
+                                                         set: { Updates.controller.updater.automaticallyChecksForUpdates = $0 }))
+            ToggleRow("Install updates automatically", isOn: Binding(get: { Updates.controller.updater.automaticallyDownloadsUpdates },
+                                                                     set: { Updates.controller.updater.automaticallyDownloadsUpdates = $0 }))
         }
         SettingsGroup(title: "Files") {
             SettingsRow("Save to") {
