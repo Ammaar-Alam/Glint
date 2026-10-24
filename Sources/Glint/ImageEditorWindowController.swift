@@ -440,8 +440,9 @@ private struct ImageEditorView: View {
         return name + shortcut
     }
 
+    // a new tool starts fresh, so its options show instead of the last mark's
     private func select(_ tool: AnnotationTool) {
-        if tool == .crop { model.select(nil) }
+        if tool != .select { model.select(nil) }
         model.tool = tool
         model.canvas?.window?.makeFirstResponder(model.canvas)
     }

@@ -173,4 +173,18 @@ final class EditorHitTests: XCTestCase {
         XCTAssertTrue(text.italic)
         XCTAssertFalse(text.bold)
     }
+
+    func testSwitchingToolsByKeyDropsTheSelection() async throws {
+        let editor = try await openEditor()
+        defer { editor.model.shutdown(); editor.window?.orderOut(nil) }
+        let mark = ImageAnnotation(tool: .pixelate, rect: CGRect(x: 20, y: 20, width: 80, height: 60))
+        editor.model.mutate("Add") { $0.annotations.append(mark) }
+        editor.model.select(mark.id)
+        let canvas = try XCTUnwrap(editor.model.canvas)
+        editor.window?.makeFirstResponder(canvas)
+        canvas.keyDown(with: try XCTUnwrap(NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [], timestamp: 0, windowNumber: 0,
+                                                             context: nil, characters: "a", charactersIgnoringModifiers: "a", isARepeat: false, keyCode: 0)))
+        XCTAssertEqual(editor.model.tool, .arrow)
+        XCTAssertTrue(editor.model.selectedIDs.isEmpty)
+    }
 }
