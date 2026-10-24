@@ -287,7 +287,7 @@ private enum EditorTools {
     static let color: Set<AnnotationTool> = [.arrow, .doubleArrow, .curvedArrow, .line, .rectangle, .ellipse, .pen, .text, .counter, .highlight, .redact]
     // tools that share one strip button, the button keeps the last variant used
     static let families: [AnnotationTool: [AnnotationTool]] = [
-        .arrow: [.arrow, .curvedArrow, .doubleArrow, .line], .rectangle: [.rectangle, .ellipse], .pixelate: [.blur, .pixelate, .redact]
+        .arrow: [.arrow, .doubleArrow, .line], .rectangle: [.rectangle, .ellipse], .pixelate: [.blur, .pixelate, .redact]
     ]
     static let memory: [AnnotationTool: String] = [.arrow: "arrowTool", .rectangle: "shapeTool", .pixelate: "redactTool"]
     static let strip: [AnnotationTool] = [.select, .arrow, .rectangle, .pen, .text, .counter, .highlight, .spotlight, .pixelate]
@@ -418,20 +418,16 @@ private struct ImageEditorView: View {
         .fixedSize()
     }
 
-    // the first click picks the tool, a second click on it opens its options
+    // a click picks the tool and drops down its options
     private func tap(_ key: AnnotationTool) {
-        if EditorTools.members(key).contains(model.tool) {
-            if EditorTools.withOptions.contains(key) { openOptions = openOptions == key ? nil : key }
-        } else {
-            openOptions = nil
-            select(EditorTools.remembered(key))
-        }
+        if !EditorTools.members(key).contains(model.tool) { select(EditorTools.remembered(key)) }
+        openOptions = EditorTools.withOptions.contains(key) && openOptions != key ? key : nil
     }
 
     private static func help(_ key: AnnotationTool) -> String {
         let name = key == .pixelate ? "Redact" : key == .rectangle ? "Shapes" : key == .arrow ? "Arrows" : key.title
         let shortcut = key.keyboardKey.map { "  \($0.uppercased())" } ?? ""
-        return name + shortcut + (EditorTools.withOptions.contains(key) ? " · click again for options" : "")
+        return name + shortcut
     }
 
     private func select(_ tool: AnnotationTool) {
@@ -540,7 +536,18 @@ private struct ToolOptions: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
-            if let variants = EditorTools.families[key] {
+            if key == .arrow {
+                HStack(spacing: 4) {
+                    ForEach(Self.arrows, id: \.name) { preset in
+                        let selected = model.tool == preset.tool && (preset.tool == .line || model.arrowStyle == preset.style)
+                        Button { chooseArrow(preset.tool, style: preset.style) } label: {
+                            ArrowPreview(tool: preset.tool, style: preset.style, color: model.color).frame(width: 40, height: 28)
+                        }
+                        .buttonStyle(ToolButtonStyle(selected: selected, size: CGSize(width: 46, height: 40)))
+                        .help(preset.name)
+                    }
+                }
+            } else if let variants = EditorTools.families[key] {
                 HStack(spacing: 4) {
                     ForEach(variants) { variant in
                         Button { choose(variant) } label: {
@@ -574,13 +581,29 @@ private struct ToolOptions: View {
             }
         }
         .padding(14)
-        .frame(width: 252, alignment: .leading)
+        .frame(width: key == .arrow ? 274 : 252, alignment: .leading)
+    }
+
+    private static let arrows: [(name: String, tool: AnnotationTool, style: ArrowStyle)] = [
+        ("Tapered", .arrow, .tapered), ("Solid", .arrow, .solid), ("Open", .arrow, .open), ("Double", .doubleArrow, .solid), ("Line", .line, .solid)
+    ]
+
+    private func chooseArrow(_ tool: AnnotationTool, style: ArrowStyle) {
+        model.tool = tool
+        model.arrowStyle = style
+        EditorTools.remember(tool)
+        let family = Set(EditorTools.members(.arrow) + [.curvedArrow])
+        model.changeStyle { item in
+            guard family.contains(item.tool) else { return }
+            if item.points.count == 3, let start = item.points.first, let end = item.points.last { item.points = [start, end] }
+            item.tool = tool
+            item.arrowStyle = tool == .line ? nil : style
+        }
     }
 
     private static func label(_ tool: AnnotationTool) -> String {
         switch tool {
         case .arrow: return "Arrow"
-        case .curvedArrow: return "Curved"
         case .doubleArrow: return "Double"
         case .line: return "Line"
         case .rectangle: return "Box"
@@ -598,13 +621,7 @@ private struct ToolOptions: View {
         EditorTools.remember(variant)
         let family = Set(EditorTools.members(key))
         model.changeStyle { item in
-            guard family.contains(item.tool), item.tool != variant else { return }
-            if variant == .curvedArrow, item.points.count == 2, let start = item.points.first, let end = item.points.last {
-                item.points = [start, CGPoint(x: end.x, y: start.y), end]
-            } else if variant != .curvedArrow, item.points.count == 3, let start = item.points.first, let end = item.points.last {
-                item.points = [start, end]
-            }
-            item.tool = variant
+            if family.contains(item.tool) { item.tool = variant }
         }
     }
 
@@ -656,6 +673,21 @@ private struct ToolOptions: View {
             guard item.tool == .counter else { return }
             let side = max(32, size * 1.6)
             item.rect = CGRect(x: item.rect.midX - side / 2, y: item.rect.midY - side / 2, width: side, height: side)
+        }
+    }
+}
+
+// the real renderer drawing a small sample, so the choice looks exactly like the result
+private struct ArrowPreview: View {
+    let tool: AnnotationTool
+    let style: ArrowStyle
+    let color: AnnotationColor
+
+    var body: some View {
+        Canvas { context, size in
+            let sample = ImageAnnotation(tool: tool, rect: .zero, points: [CGPoint(x: 5, y: size.height - 5), CGPoint(x: size.width - 5, y: 5)],
+                                         color: color, lineWidth: 2.5, arrowStyle: style)
+            context.withCGContext { ImageRenderer.drawAnnotation(sample, context: $0, imageBounds: CGRect(origin: .zero, size: size)) }
         }
     }
 }

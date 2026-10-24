@@ -102,6 +102,42 @@ enum ImageRenderer {
         context.restoreGState()
     }
 
+    // filled heads sized from the line width, the tapered body swells from a fine tail into its head
+    private static func drawSolidArrow(_ item: ImageAnnotation, style: ArrowStyle, from start: CGPoint, to end: CGPoint, context: CGContext) {
+        let length = hypot(end.x - start.x, end.y - start.y)
+        guard length > 0.5 else { return }
+        let width = item.lineWidth
+        let direction = CGPoint(x: (end.x - start.x) / length, y: (end.y - start.y) / length)
+        let double = item.tool == .doubleArrow
+        let headLength = min(length / (double ? 2.2 : 1.2), max(10, width * 4.2))
+        let headHalf = headLength * 0.6
+        func point(_ origin: CGPoint, along: CGFloat, across: CGFloat, _ axis: CGPoint = direction) -> CGPoint {
+            CGPoint(x: origin.x + axis.x * along - axis.y * across, y: origin.y + axis.y * along + axis.x * across)
+        }
+        // a thin outline rounds the sharp corners of the fills
+        context.setLineWidth(max(1, width * 0.25))
+        if style == .tapered, !double {
+            let tail = width * 0.2, neck = width * 0.85
+            context.addLines(between: [point(start, along: 0, across: tail), point(end, along: -headLength, across: neck), point(end, along: -headLength, across: headHalf), end,
+                                       point(end, along: -headLength, across: -headHalf), point(end, along: -headLength, across: -neck), point(start, along: 0, across: -tail)])
+            context.closePath()
+            context.drawPath(using: .fillStroke)
+            return
+        }
+        let reverse = CGPoint(x: -direction.x, y: -direction.y)
+        context.saveGState()
+        context.setLineWidth(width)
+        context.move(to: double ? point(start, along: headLength * 0.7, across: 0) : start)
+        context.addLine(to: point(end, along: -headLength * 0.7, across: 0))
+        context.strokePath()
+        context.restoreGState()
+        for (tip, axis) in [(end, direction)] + (double ? [(start, reverse)] : []) {
+            context.addLines(between: [tip, point(tip, along: -headLength, across: headHalf, axis), point(tip, along: -headLength, across: -headHalf, axis)])
+            context.closePath()
+            context.drawPath(using: .fillStroke)
+        }
+    }
+
     static func drawAnnotation(_ item: ImageAnnotation, context: CGContext, imageBounds: CGRect,
                                insertedImages: [UUID: CGImage] = [:]) {
         context.saveGState()
@@ -115,6 +151,10 @@ enum ImageRenderer {
         switch item.tool {
         case .line, .arrow, .doubleArrow, .curvedArrow, .pen:
             guard let start = item.points.first, let end = item.points.last else { return }
+            if [.arrow, .doubleArrow].contains(item.tool), let style = item.arrowStyle, style != .open {
+                drawSolidArrow(item, style: style, from: start, to: end, context: context)
+                return
+            }
             context.beginPath()
             context.move(to: start)
             var arrowFrom = start

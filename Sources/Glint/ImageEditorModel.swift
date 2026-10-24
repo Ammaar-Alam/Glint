@@ -34,6 +34,9 @@ final class ImageEditorModel: ObservableObject {
     @Published var zoomLabel = "Fit"
     @Published var cropAspectRatio = 0.0 { didSet { fitCropDraftToRatio() } }
     @Published var smartHighlight = true
+    @Published var arrowStyle = UserDefaults.standard.string(forKey: "arrowStyle").flatMap(ArrowStyle.init(rawValue:)) ?? .tapered {
+        didSet { UserDefaults.standard.set(arrowStyle.rawValue, forKey: "arrowStyle") }
+    }
     @Published var canCapture = false
     @Published var canPin = false
     @Published var backgroundPresets: [ImageBackground] = []
@@ -282,6 +285,7 @@ final class ImageEditorModel: ObservableObject {
         annotation.filled = filled
         annotation.bold = bold
         annotation.italic = italic
+        if [.arrow, .doubleArrow].contains(tool) { annotation.arrowStyle = arrowStyle }
         annotation.number = (document?.annotations.filter { $0.tool == .counter }.map(\.number).max() ?? 0) + 1
         return annotation
     }
