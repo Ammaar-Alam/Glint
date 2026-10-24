@@ -83,6 +83,7 @@ final class SelectionController {
     private var frozenFrames: [FrozenDisplayFrame] = []
     private var snapshots: (() async -> [FrozenDisplayFrame])?
     private var snapshotTask: Task<Void, Never>?
+    private var moveMonitor: Any?
     private var showsLoupe = false
     private var toolbar: SelectionPanel?
     private var fixedSize: CGSize?
@@ -177,6 +178,10 @@ final class SelectionController {
                 // plain shortcuts capture on release, only the all-in-one bar has choices to make
                 if allInOne { showToolbar() }
                 move(to: point, modifiers: [])
+                // moves go to the frontmost app until Glint is activated by a click, so follow them from outside too
+                moveMonitor = NSEvent.addGlobalMonitorForEvents(matching: .mouseMoved) { [weak self] event in
+                    MainActor.assumeIsolated { self?.move(to: NSEvent.mouseLocation, modifiers: event.modifierFlags) }
+                }
                 loadSnapshots()
             }
         } onCancel: {
@@ -449,6 +454,8 @@ final class SelectionController {
         self.continuation = nil
         snapshotTask?.cancel()
         snapshotTask = nil
+        if let moveMonitor { NSEvent.removeMonitor(moveMonitor) }
+        moveMonitor = nil
         toolbar?.orderOut(nil)
         toolbar?.close()
         toolbar = nil

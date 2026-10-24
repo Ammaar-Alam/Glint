@@ -131,7 +131,7 @@ final class QuickAccessPanel: NSPanel {
         if !shelf.ids.isEmpty { show(); startDismissTimer() }
     }
 
-    static let baseCardSize = CGSize(width: 232, height: 146)
+    static let baseCardSize = CGSize(width: 212, height: 134)
     nonisolated static var cardScale: CGFloat {
         let value = UserDefaults.standard.double(forKey: "shelfScale")
         return value > 0 ? min(1.5, max(0.75, value)) : 1
@@ -179,8 +179,9 @@ final class QuickAccessPanel: NSPanel {
             y -= Self.gap
         }
         contentView = container
-        let x = right ? visible.maxX - width - 2 : visible.minX + 2
-        let originY = bottom ? visible.minY + 2 : visible.maxY - min(height, visible.height) - 2
+        // cards sit about 24pt in from the screen edges
+        let x = right ? visible.maxX - width - 10 : visible.minX + 10
+        let originY = bottom ? visible.minY + 10 : visible.maxY - min(height, visible.height) - 10
         setFrame(CGRect(x: x, y: originY, width: width, height: min(height, visible.height)), display: true)
     }
 
