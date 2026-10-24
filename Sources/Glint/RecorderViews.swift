@@ -2,46 +2,35 @@ import AppKit
 import AVFoundation
 import SwiftUI
 
-// everything about a recording laid out in the capture panel, inputs as named switches and quality as plain choices
+// what goes into a recording as one row of small switches, each named on hover
 struct RecordingBarControls: View {
     @Binding var options: RecordingOptions
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 6), count: 3), spacing: 6) {
-                chip("System Audio", on: "speaker.wave.2.fill", off: "speaker.slash", isOn: $options.capturesSystemAudio)
-                chip("Microphone", on: "mic.fill", off: "mic.slash", isOn: $options.capturesMicrophone)
-                    .contextMenu { devices(Self.microphones, selection: \.microphoneDeviceID, enabled: \.capturesMicrophone) }
-                chip("Camera", on: "video.fill", off: "video.slash", isOn: $options.capturesCamera)
-                    .contextMenu { devices(Self.cameras, selection: \.cameraDeviceID, enabled: \.capturesCamera) }
-                chip("Cursor", on: "cursorarrow", off: "cursorarrow.slash", isOn: $options.showsCursor)
-                chip("Clicks", on: "cursorarrow.click.2", off: "cursorarrow.click", isOn: $options.showsClicks)
-                chip("Keystrokes", on: "keyboard.fill", off: "keyboard", isOn: $options.showsKeystrokes)
-                    .contextMenu { Toggle("Only Shortcuts", isOn: $options.keystrokesOnlyShortcuts) }
-            }
-            HStack(spacing: 8) {
-                SegmentedChoice(choices: [("Video", RecordingFormat.video), ("GIF", .gif)], selection: $options.format)
-                SegmentedChoice(choices: [("24", 24), ("30", 30), ("60 fps", 60)], selection: $options.framesPerSecond)
-                SegmentedChoice(choices: [("1080p", 1920), ("1440p", 2560), ("4K", 3840)], selection: $options.maximumDimension)
-            }
-            chip("Hide Desktop Icons", on: "eye.slash", off: "eye", isOn: $options.hideDesktop)
-                .fixedSize()
+        HStack(spacing: 2) {
+            toggle("System Audio", on: "speaker.wave.2.fill", off: "speaker.slash", isOn: $options.capturesSystemAudio)
+            toggle("Microphone", on: "mic.fill", off: "mic.slash", isOn: $options.capturesMicrophone)
+                .contextMenu { devices(Self.microphones, selection: \.microphoneDeviceID, enabled: \.capturesMicrophone) }
+            toggle("Camera", on: "video.fill", off: "video.slash", isOn: $options.capturesCamera)
+                .contextMenu { devices(Self.cameras, selection: \.cameraDeviceID, enabled: \.capturesCamera) }
+            BarDivider()
+            toggle("Cursor", on: "cursorarrow", off: "cursorarrow.slash", isOn: $options.showsCursor)
+            toggle("Highlight Clicks", on: "cursorarrow.click.2", off: "cursorarrow.click", isOn: $options.showsClicks)
+            toggle("Keystrokes", on: "keyboard.fill", off: "keyboard", isOn: $options.showsKeystrokes)
+                .contextMenu { Toggle("Only Shortcuts", isOn: $options.keystrokesOnlyShortcuts) }
+            BarDivider()
+            toggle("Hide Desktop Icons", on: "eye.slash", off: "eye", isOn: $options.hideDesktop)
         }
     }
 
-    private func chip(_ title: String, on: String, off: String, isOn: Binding<Bool>) -> some View {
+    private func toggle(_ title: String, on: String, off: String, isOn: Binding<Bool>) -> some View {
         Button { isOn.wrappedValue.toggle() } label: {
-            HStack(spacing: 6) {
-                Image(systemName: isOn.wrappedValue ? on : off)
-                    .contentTransition(.symbolEffect(.replace))
-                    .frame(width: 16)
-                Text(title).font(.system(size: 12, weight: .medium)).lineLimit(1)
-                Spacer(minLength: 0)
-            }
-            .padding(.horizontal, 10)
-            .foregroundStyle(isOn.wrappedValue ? Color.primary : Color.secondary)
+            Image(systemName: isOn.wrappedValue ? on : off)
+                .font(.system(size: 13, weight: .medium))
+                .foregroundStyle(isOn.wrappedValue ? Color.glint : Color.secondary)
+                .contentTransition(.symbolEffect(.replace))
         }
-        .buttonStyle(ToolButtonStyle(selected: isOn.wrappedValue, size: CGSize(width: 0, height: 30), tint: .primary))
+        .buttonStyle(ToolButtonStyle(selected: isOn.wrappedValue, size: CGSize(width: 32, height: 28)))
         .help(title)
         .accessibilityLabel(title)
         .accessibilityValue(isOn.wrappedValue ? "On" : "Off")
@@ -120,9 +109,8 @@ struct RecordingControls: View {
         }
         .padding(.horizontal, 6)
         .frame(height: 40)
-        .background(Color.white, in: Capsule())
+        .background { Capsule().fill(Color.white).shadow(color: .black.opacity(0.2), radius: 12, y: 3) }
         .overlay(Capsule().strokeBorder(Color.black.opacity(0.08)))
-        .shadow(color: .black.opacity(0.2), radius: 12, y: 3)
         .animation(.snappy(duration: 0.22), value: recorder.state)
         .fixedSize()
         .padding(16)
