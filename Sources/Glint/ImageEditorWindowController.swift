@@ -68,6 +68,7 @@ final class ImageEditorWindowController: NSWindowController, NSWindowDelegate, E
     }
 
     func windowWillClose(_ notification: Notification) { model.shutdown() }
+    func windowWillReturnUndoManager(_ window: NSWindow) -> UndoManager? { model.undoManager }
 
     func prepareToClose() async -> Bool {
         guard !evaluatingClose, let window else { return false }
@@ -80,7 +81,10 @@ final class ImageEditorWindowController: NSWindowController, NSWindowDelegate, E
             await alert.beginSheetModal(for: window)
             return false
         }
-        model.canvas?.commitEditing()
+        if model.document != nil {
+            do { _ = try model.finishedContents() }
+            catch { model.errorMessage = error.localizedDescription; return false }
+        }
         guard model.hasUnsavedChanges else { return true }
         let alert = NSAlert()
         alert.messageText = "Save your edits?"
@@ -145,9 +149,8 @@ final class ImageEditorWindowController: NSWindowController, NSWindowDelegate, E
     // the edited image as a png named after the capture, for pin, share and drag
     func flattenedFile() async -> URL? {
         guard !model.busy, model.document != nil else { return nil }
-        model.canvas?.commitEditing()
         do {
-            let contents = try model.snapshot()
+            let contents = try model.finishedContents()
             let name = model.inputURL.deletingPathExtension().lastPathComponent
             model.busy = true
             defer { model.busy = false }
@@ -176,7 +179,8 @@ final class ImageEditorWindowController: NSWindowController, NSWindowDelegate, E
     // saves edits back to the capture, a plain screenshot gets an edited copy so the original stays intact
     func finishEditing() {
         guard !model.busy, model.document != nil else { return }
-        model.canvas?.commitEditing()
+        do { _ = try model.finishedContents() }
+        catch { model.errorMessage = error.localizedDescription; return }
         guard model.hasUnsavedChanges else { close(); return }
         Task {
             do {
@@ -196,7 +200,8 @@ final class ImageEditorWindowController: NSWindowController, NSWindowDelegate, E
 
     private func captureImage() {
         guard !model.busy, let onCapture else { return }
-        model.canvas?.commitEditing()
+        do { _ = try model.finishedContents() }
+        catch { model.errorMessage = error.localizedDescription; return }
         model.busy = true
         window?.orderOut(nil)
         Task {
@@ -209,10 +214,9 @@ final class ImageEditorWindowController: NSWindowController, NSWindowDelegate, E
 
     private func printImage() {
         guard !model.busy, let window else { return }
-        model.canvas?.commitEditing()
         Task {
             do {
-                let contents = try model.snapshot()
+                let contents = try model.finishedContents()
                 model.busy = true
                 defer { model.busy = false }
                 let image = try await Task.detached(priority: .userInitiated) { try ImageRenderer.render(contents) }.value
@@ -551,9 +555,9 @@ private struct ToolOptionsBar: View {
         Island {
             if key == .arrow {
                 ForEach(Self.arrows, id: \.name) { preset in
-                    let selected = active.contains(preset.tool) && (preset.tool == .line || model.arrowStyle == preset.style)
+                    let selected = active.contains(preset.tool) && (preset.tool == .line || model.style.arrowStyle == preset.style)
                     Button { chooseArrow(preset.tool, style: preset.style) } label: {
-                        ArrowPreview(tool: preset.tool, style: preset.style, color: model.color).frame(width: 26, height: 18)
+                        ArrowPreview(tool: preset.tool, style: preset.style, color: model.style.color).frame(width: 26, height: 18)
                     }
                     .buttonStyle(ToolButtonStyle(selected: selected, size: CGSize(width: 36, height: 28)))
                     .help(preset.name)
@@ -580,17 +584,17 @@ private struct ToolOptionsBar: View {
                 slider(symbol: "lineweight", help: "Thickness", in: 1...40)
             case .rectangle:
                 slider(symbol: "lineweight", help: "Thickness", in: 1...40)
-                Button { setFilled(!model.filled) } label: { Image(systemName: model.filled ? "square.fill" : "square") }
-                    .buttonStyle(ToolButtonStyle(selected: model.filled)).help("Fill")
+                Button { setFilled(!model.style.filled) } label: { Image(systemName: model.style.filled ? "square.fill" : "square") }
+                    .buttonStyle(ToolButtonStyle(selected: model.style.filled)).help("Fill")
             case .pixelate:
                 if !active.contains(.redact) { slider(symbol: "aqi.medium", help: "Strength", in: 2...40) }
             case .text:
                 stepper
                 BarDivider()
-                Button { model.bold.toggle(); let value = model.bold; model.changeStyle { $0.bold = value } } label: { Image(systemName: "bold") }
-                    .buttonStyle(ToolButtonStyle(selected: model.bold)).help("Bold")
-                Button { model.italic.toggle(); let value = model.italic; model.changeStyle { $0.italic = value } } label: { Image(systemName: "italic") }
-                    .buttonStyle(ToolButtonStyle(selected: model.italic)).help("Italic")
+                Button { let bold = !model.style.bold; model.setStyle { $0.bold = bold } } label: { Image(systemName: "bold") }
+                    .buttonStyle(ToolButtonStyle(selected: model.style.bold)).help("Bold")
+                Button { let italic = !model.style.italic; model.setStyle { $0.italic = italic } } label: { Image(systemName: "italic") }
+                    .buttonStyle(ToolButtonStyle(selected: model.style.italic)).help("Italic")
             case .counter: stepper
             case .highlight:
                 Button { model.smartHighlight.toggle() } label: {
@@ -611,14 +615,19 @@ private struct ToolOptionsBar: View {
 
     private func chooseArrow(_ tool: AnnotationTool, style: ArrowStyle) {
         model.tool = tool
-        model.arrowStyle = style
+        model.beginAdjusting()
+        defer { model.endAdjusting() }
+        model.setStyle { $0.arrowStyle = style }
         EditorTools.remember(tool)
         let family = Set(EditorTools.members(.arrow) + [.curvedArrow])
-        model.changeStyle { item in
-            guard family.contains(item.tool) else { return }
-            if item.points.count == 3, let start = item.points.first, let end = item.points.last { item.points = [start, end] }
-            item.tool = tool
-            item.arrowStyle = tool == .line ? nil : style
+        model.mutate("Change Style") { document in
+            for index in document.annotations.indices where model.selectedIDs.contains(document.annotations[index].id) && family.contains(document.annotations[index].tool) {
+                var item = document.annotations[index]
+                if item.points.count == 3, let start = item.points.first, let end = item.points.last { item.points = [start, end] }
+                item.tool = tool
+                item.arrowStyle = tool == .line ? nil : style
+                document.annotations[index] = item
+            }
         }
     }
 
@@ -638,20 +647,22 @@ private struct ToolOptionsBar: View {
         model.tool = variant
         EditorTools.remember(variant)
         let family = Set(EditorTools.members(key))
-        model.changeStyle { item in
-            if family.contains(item.tool) { item.tool = variant }
+        model.mutate("Change Style") { document in
+            for index in document.annotations.indices where model.selectedIDs.contains(document.annotations[index].id) && family.contains(document.annotations[index].tool) {
+                document.annotations[index].tool = variant
+            }
         }
     }
 
     private func slider(symbol: String, help: String, in range: ClosedRange<Double>) -> some View {
         HStack(spacing: 8) {
             Image(systemName: symbol).font(.system(size: 12, weight: .medium)).foregroundStyle(.secondary)
-            Slider(value: Binding(get: { min(range.upperBound, max(range.lowerBound, model.lineWidth)) }, set: { setLineWidth($0.rounded()) }), in: range) { editing in
+            Slider(value: Binding(get: { min(range.upperBound, max(range.lowerBound, model.style.lineWidth)) }, set: { setLineWidth($0.rounded()) }), in: range) { editing in
                 if editing { model.beginAdjusting() } else { model.endAdjusting() }
             }
             .controlSize(.small)
             .frame(width: 110)
-            Text("\(Int(model.lineWidth))").font(.system(size: 12, weight: .medium).monospacedDigit()).foregroundStyle(.secondary).frame(width: 20, alignment: .trailing)
+            Text("\(Int(model.style.lineWidth))").font(.system(size: 12, weight: .medium).monospacedDigit()).foregroundStyle(.secondary).frame(width: 20, alignment: .trailing)
         }
         .padding(.horizontal, 8)
         .help(help)
@@ -659,27 +670,21 @@ private struct ToolOptionsBar: View {
 
     private var stepper: some View {
         HStack(spacing: 0) {
-            Button { setFontSize(model.fontSize - 2) } label: { Image(systemName: "textformat.size.smaller") }
+            Button { setFontSize(model.style.fontSize - 2) } label: { Image(systemName: "textformat.size.smaller") }
                 .buttonStyle(ToolButtonStyle(size: CGSize(width: 30, height: 28))).help("Smaller")
-            Text("\(Int(model.fontSize))").font(.system(size: 12, weight: .semibold).monospacedDigit()).frame(width: 32)
+            Text("\(Int(model.style.fontSize))").font(.system(size: 12, weight: .semibold).monospacedDigit()).frame(width: 32)
                 .contentTransition(.numericText())
-                .animation(.snappy(duration: 0.18), value: model.fontSize)
-            Button { setFontSize(model.fontSize + 2) } label: { Image(systemName: "textformat.size.larger") }
+                .animation(.snappy(duration: 0.18), value: model.style.fontSize)
+            Button { setFontSize(model.style.fontSize + 2) } label: { Image(systemName: "textformat.size.larger") }
                 .buttonStyle(ToolButtonStyle(size: CGSize(width: 30, height: 28))).help("Larger")
         }
     }
 
-    private func setLineWidth(_ width: Double) { model.lineWidth = width; model.changeStyle { $0.lineWidth = width } }
-    private func setFilled(_ filled: Bool) { model.filled = filled; model.changeStyle { $0.filled = filled } }
+    private func setLineWidth(_ width: Double) { model.setStyle { $0.lineWidth = width } }
+    private func setFilled(_ filled: Bool) { model.setStyle { $0.filled = filled } }
     private func setFontSize(_ size: Double) {
         let size = min(512, max(6, size))
-        model.fontSize = size
-        model.changeStyle { item in
-            item.fontSize = size
-            guard item.tool == .counter else { return }
-            let side = max(32, size * 1.6)
-            item.rect = CGRect(x: item.rect.midX - side / 2, y: item.rect.midY - side / 2, width: side, height: side)
-        }
+        model.setStyle { $0.fontSize = size }
     }
 }
 
@@ -712,7 +717,7 @@ private struct ColorColumn: View {
         HStack(alignment: .center, spacing: 8) {
             VStack(spacing: 4) {
                 ForEach(Array(AnnotationColor.palette.enumerated()), id: \.offset) { index, color in
-                    ColorDot(color: color.nsColor, selected: model.color == color, size: 18) { model.setColor(color) }
+                    ColorDot(color: color.nsColor, selected: model.style.color == color, size: 18) { model.setStyle { $0.color = color } }
                         .help("\(AnnotationColor.paletteNames[index])  \(index + 1)")
                         .accessibilityLabel(AnnotationColor.paletteNames[index])
                 }
@@ -734,7 +739,7 @@ private struct ColorColumn: View {
             .overlay(RoundedRectangle(cornerRadius: Radius.card, style: .continuous).strokeBorder(Color.primary.opacity(0.08)))
             .shadow(color: .black.opacity(0.1), radius: 8, y: 2)
             if expanded {
-                ColorPickerPanel(color: model.color.nsColor, onChange: { model.setColor(AnnotationColor($0)) },
+                ColorPickerPanel(color: model.style.color.nsColor, onChange: { color in model.setStyle { $0.color = AnnotationColor(color) } },
                                  onEditing: { editing in editing ? model.beginAdjusting() : model.endAdjusting() })
                     .padding(12)
                     .background(.regularMaterial, in: RoundedRectangle(cornerRadius: Radius.card, style: .continuous))

@@ -99,9 +99,7 @@ final class VideoEditorModel {
         guard project.editedDuration > 0 else { errorMessage = "Keep at least one frame in the video."; return }
         if key != lastEditKey || Date().timeIntervalSince(lastEditDate) > 0.6 { remember(previous) }
         lastEditKey = key; lastEditDate = Date()
-        self.project = project
-        if key == \VideoEdits.exportQuality { window?.isDocumentEdited = isDirty; return }
-        refreshPreview()
+        apply(project.edits)
     }
 
     func edit(_ body: (inout VideoEdits) -> Void) {
@@ -110,8 +108,7 @@ final class VideoEditorModel {
         body(&project.edits)
         guard before != project.edits else { return }
         remember(before); lastEditKey = nil
-        self.project = project
-        refreshPreview()
+        apply(project.edits)
     }
 
     func binding<Value: Equatable>(_ key: WritableKeyPath<VideoEdits, Value>, fallback: Value) -> Binding<Value> {
@@ -126,14 +123,29 @@ final class VideoEditorModel {
 
     func undo() {
         guard let previous = undoStack.popLast(), let current = project?.edits else { return }
-        redoStack.append(current); project?.edits = previous; lastEditKey = nil
-        refreshPreview()
+        redoStack.append(current); lastEditKey = nil
+        apply(previous)
     }
 
     func redo() {
         guard let next = redoStack.popLast(), let current = project?.edits else { return }
-        undoStack.append(current); project?.edits = next; lastEditKey = nil
-        refreshPreview()
+        undoStack.append(current); lastEditKey = nil
+        apply(next)
+    }
+
+    private func apply(_ edits: VideoEdits) {
+        guard var project else { return }
+        let source = project.sourceTime(at: currentTime)
+        let previous = project.edits
+        project.edits = edits
+        self.project = project
+        currentTime = min(project.outputTime(at: source), max(0, project.editedDuration - 0.001))
+        if !edits.zooms.contains(where: { $0.id == selectedZoom }) { selectedZoom = nil }
+        if !edits.zooms.contains(where: { $0.id == pickingZoom }) { pickingZoom = nil }
+        window?.isDocumentEdited = isDirty
+        var previewEdits = edits
+        previewEdits.exportQuality = previous.exportQuality
+        if previewEdits != previous { refreshPreview() }
     }
 
     func refreshPreview(immediately: Bool = false) {
@@ -142,6 +154,27 @@ final class VideoEditorModel {
         let backgrounds = backgroundDirectory
         previewTask = Task { [weak self] in
             do {
+                try Task.checkCancellation()
+                if let self, let item = self.player.currentItem, let current = item.videoComposition,
+                   let instruction = current.instructions.first as? VideoInstruction {
+                    let previous = instruction.project.edits, edits = project.edits
+                    if previous.trimStart == edits.trimStart, previous.trimEnd == edits.trimEnd, previous.cuts == edits.cuts,
+                       previous.audioEnabled == edits.audioEnabled, previous.systemVolume == edits.systemVolume,
+                       previous.microphoneVolume == edits.microphoneVolume, previous.backgroundFile == edits.backgroundFile,
+                       previous.maximumDimension == edits.maximumDimension {
+                        _ = try project.validated()
+                        let composition = current.mutableCopy() as! AVMutableVideoComposition
+                        composition.renderSize = VideoGeometry.outputSize(for: project)
+                        composition.instructions = [VideoInstruction(project: project, screenTrackID: instruction.screenTrackID,
+                            cameraTrackID: instruction.cameraTrackID, screenTransform: instruction.screenTransform,
+                            cameraTransform: instruction.cameraTransform, backgroundImage: instruction.backgroundImage, activity: instruction.activity)]
+                        item.videoComposition = composition
+                        self.previewTask = nil
+                        self.isPreparing = false
+                        if self.isPlaying { self.player.play() }
+                        return
+                    }
+                }
                 if !immediately { try await Task.sleep(for: .milliseconds(180)) }
                 try Task.checkCancellation()
                 let composition = try await VideoCompositionBuilder.make(project: project, directory: directory, backgroundDirectory: backgrounds)
@@ -153,10 +186,12 @@ final class VideoEditorModel {
                 item.audioMix = composition.audioMix
                 player.replaceCurrentItem(with: item)
                 await player.seek(to: CMTime(seconds: position, preferredTimescale: 600), toleranceBefore: .zero, toleranceAfter: .zero)
+                try Task.checkCancellation()
                 if isPlaying { player.play() }
                 isPreparing = false
                 window?.isDocumentEdited = isDirty
             } catch is CancellationError {} catch {
+                guard !Task.isCancelled else { return }
                 self?.isPreparing = false; self?.errorMessage = error.localizedDescription
             }
         }
@@ -197,8 +232,6 @@ final class VideoEditorModel {
 
     func removeZoom(_ id: UUID) {
         edit { $0.zooms.removeAll { $0.id == id } }
-        if selectedZoom == id { selectedZoom = nil }
-        if pickingZoom == id { pickingZoom = nil }
     }
 
     func updateZoom(_ id: UUID, _ body: (inout VideoZoom) -> Void) {

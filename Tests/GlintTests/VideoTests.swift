@@ -9,6 +9,82 @@ import SwiftUI
 
 final class VideoTests: XCTestCase {
     @MainActor
+    func testCutBeforePlayheadPreservesSourceFrameThroughUndoRedo() async throws {
+        let model = try await editingModel()
+        defer { model.shutdown() }
+        model.seek(to: 0.7)
+        model.removeRange(start: 0.1, end: 0.3)
+        XCTAssertEqual(model.currentTime, 0.5, accuracy: 0.001)
+        XCTAssertEqual(model.sourceTime, 0.7, accuracy: 0.001)
+        model.undo()
+        XCTAssertEqual(model.sourceTime, 0.7, accuracy: 0.001)
+        model.redo()
+        XCTAssertEqual(model.sourceTime, 0.7, accuracy: 0.001)
+        model.set(\.trimStart, 0.4)
+        XCTAssertEqual(model.sourceTime, 0.7, accuracy: 0.001)
+    }
+
+    @MainActor
+    func testUndoAddZoomClearsPickingAndSelection() async throws {
+        let model = try await editingModel()
+        defer { model.shutdown() }
+        model.addZoom(at: 0)
+        model.pickingZoom = try XCTUnwrap(model.selectedZoom)
+        model.undo()
+        XCTAssertNil(model.selectedZoom)
+        XCTAssertNil(model.pickingZoom)
+        model.redo()
+        XCTAssertNil(model.pickingZoom)
+    }
+
+    @MainActor
+    func testVisualEditsReusePlayerItemAndTimelineEditsRebuild() async throws {
+        let model = try await editingModel()
+        defer { model.shutdown() }
+        let project = try XCTUnwrap(model.project)
+        let item = AVPlayerItem(asset: AVMutableComposition())
+        let composition = AVMutableVideoComposition()
+        composition.renderSize = VideoGeometry.outputSize(for: project)
+        composition.frameDuration = CMTime(value: 1, timescale: 10)
+        composition.customVideoCompositorClass = VideoCompositor.self
+        composition.instructions = [VideoInstruction(project: project, screenTrackID: 1, cameraTrackID: nil,
+            screenTransform: .identity, cameraTransform: .identity, backgroundImage: nil)]
+        item.videoComposition = composition
+        model.player.replaceCurrentItem(with: item)
+        model.set(\.padding, 120)
+        for _ in 0..<100 where (item.videoComposition?.instructions.first as? VideoInstruction)?.project.edits.padding != 120 {
+            try await Task.sleep(for: .milliseconds(5))
+        }
+        XCTAssertTrue(model.player.currentItem === item)
+        XCTAssertEqual((item.videoComposition?.instructions.first as? VideoInstruction)?.project.edits.padding, 120)
+        model.edit { $0.customWidth = 640; $0.customHeight = 360 }
+        for _ in 0..<100 where item.videoComposition?.renderSize.width != 640 { try await Task.sleep(for: .milliseconds(5)) }
+        XCTAssertEqual(item.videoComposition?.renderSize, CGSize(width: 640, height: 360))
+        XCTAssertTrue(model.player.currentItem === item)
+        model.errorMessage = nil
+        model.set(\.trimStart, 0.2)
+        for _ in 0..<100 where model.errorMessage == nil { try await Task.sleep(for: .milliseconds(10)) }
+        XCTAssertNotNil(model.errorMessage, "a timeline edit must reopen the fixture's empty media file")
+        XCTAssertEqual((item.videoComposition?.instructions.first as? VideoInstruction)?.project.edits.trimStart, 0)
+    }
+
+    @MainActor
+    private func editingModel() async throws -> VideoEditorModel {
+        let root = try Self.directory()
+        addTeardownBlock { try? FileManager.default.removeItem(at: root) }
+        let package = root.appendingPathComponent("recording.glintvideo", isDirectory: true)
+        try FileManager.default.createDirectory(at: package, withIntermediateDirectories: false)
+        try Data().write(to: package.appendingPathComponent("screen.mov"))
+        try VideoProject(duration: 1, width: 96, height: 64, frameRate: 10).save(to: package)
+        let model = VideoEditorModel(url: package) { _ in }
+        model.load()
+        let deadline = Date().addingTimeInterval(5)
+        while model.project == nil && model.errorMessage == nil && Date() < deadline { try await Task.sleep(for: .milliseconds(10)) }
+        _ = try XCTUnwrap(model.project)
+        return model
+    }
+
+    @MainActor
     func testVideoEditorCreatesNativePlaybackViewOffscreen() async throws {
         let root = try Self.directory()
         defer { try? FileManager.default.removeItem(at: root) }

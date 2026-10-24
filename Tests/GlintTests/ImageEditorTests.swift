@@ -4,6 +4,149 @@ import ImageIO
 @testable import Glint
 
 final class ImageEditorTests: XCTestCase {
+    @MainActor
+    private func editingModel() async throws -> ImageEditorModel {
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("\(UUID().uuidString).png")
+        addTeardownBlock { try? FileManager.default.removeItem(at: url) }
+        try ImageFile.write(fixture(width: 20, height: 12), to: url)
+        let model = ImageEditorModel(url: url) { _ in }
+        for _ in 0..<100 where model.document == nil { try await Task.sleep(for: .milliseconds(20)) }
+        _ = try XCTUnwrap(model.document)
+        model.undoManager.groupsByEvent = false
+        return model
+    }
+
+    func testAnnotationStyleKeepsTheStoredFormat() throws {
+        var mark = ImageAnnotation(tool: .arrow, rect: .zero)
+        mark.style = AnnotationStyle(color: .white, lineWidth: 12, fontSize: 60, filled: true, bold: false, italic: true, arrowStyle: .solid)
+        let data = try JSONEncoder().encode(mark)
+        let fields = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        XCTAssertNil(fields["style"])
+        XCTAssertEqual(fields["lineWidth"] as? Double, 12)
+        XCTAssertEqual(try JSONDecoder().decode(ImageAnnotation.self, from: data), mark)
+    }
+
+    @MainActor
+    func testFinishedContentsAppliesPendingCropWithoutCanvas() async throws {
+        let model = try await editingModel()
+        defer { model.shutdown() }
+        model.tool = .crop
+        let crop = CGRect(x: 2, y: 3, width: 10, height: 6)
+        model.setCropDraft(crop)
+        XCTAssertEqual(try model.finishedContents().document.cropRect, crop)
+        XCTAssertNil(model.cropDraft)
+        XCTAssertEqual(model.tool, .select)
+    }
+
+    @MainActor
+    func testCancellingTextRestoresTheDocumentWithoutAnUndoStep() async throws {
+        let model = try await editingModel()
+        defer { model.shutdown() }
+        var text = model.newAnnotation(tool: .text, at: .zero)
+        text.text = "Original"
+        model.mutate("Add Text") { $0.annotations.append(text) }
+        let original = model.document
+        model.beginText(text)
+        model.updateText("Changed", height: 40)
+        model.setStyle { $0.fontSize = 60 }
+        model.finishText(cancelled: true)
+        XCTAssertEqual(model.document, original)
+        XCTAssertNil(model.editingTextID)
+        model.undoManager.undo()
+        XCTAssertTrue(try XCTUnwrap(model.document).annotations.isEmpty)
+        XCTAssertFalse(model.undoManager.canUndo)
+    }
+
+    @MainActor
+    func testUndoDuringGestureCannotReapplyTheUndoneEdit() async throws {
+        let model = try await editingModel()
+        defer { model.shutdown() }
+        let original = try XCTUnwrap(model.document)
+        var moved = original
+        moved.annotations = [ImageAnnotation(tool: .rectangle, rect: CGRect(x: 2, y: 2, width: 8, height: 6))]
+        model.beginGesture()
+        model.updateGesture(moved)
+        XCTAssertTrue(model.isGesturing)
+        XCTAssertTrue(model.undoManager.canUndo)
+        model.undoManager.undo()
+        XCTAssertFalse(model.isGesturing)
+        model.updateGesture(moved)
+        model.finishGesture(action: "Move")
+        XCTAssertEqual(model.document, original)
+        XCTAssertFalse(model.undoManager.canUndo)
+        model.undoManager.redo()
+        XCTAssertEqual(model.document, moved)
+    }
+
+    @MainActor
+    func testUndoDuringSliderEndsTheTransaction() async throws {
+        let model = try await editingModel()
+        defer { model.shutdown() }
+        let original = model.document
+        model.beginAdjusting()
+        model.mutate("Padding") { $0.background.padding = 90 }
+        model.undoManager.undo()
+        model.endAdjusting()
+        XCTAssertFalse(model.isAdjusting)
+        XCTAssertEqual(model.document, original)
+        XCTAssertFalse(model.undoManager.canUndo)
+    }
+
+    @MainActor
+    func testUndoStyleChangeRestoresShownStyle() async throws {
+        let model = try await editingModel()
+        defer { model.shutdown() }
+        let mark = ImageAnnotation(tool: .rectangle, rect: CGRect(x: 2, y: 2, width: 8, height: 6))
+        model.mutate("Add") { $0.annotations.append(mark) }
+        model.select(mark.id)
+        model.setStyle { $0.color = .white; $0.lineWidth = 12 }
+        XCTAssertEqual(model.style.color, .white)
+        model.undoManager.undo()
+        XCTAssertEqual(model.style, mark.style)
+        model.undoManager.redo()
+        XCTAssertEqual(model.style.lineWidth, 12)
+        model.select(nil)
+        XCTAssertEqual(model.style, model.toolStyle)
+    }
+
+    @MainActor
+    func testUndoWhileTypingDoesNotResurrectText() async throws {
+        let model = try await editingModel()
+        defer { model.shutdown() }
+        let text = model.newAnnotation(tool: .text, at: .zero)
+        model.beginText(text)
+        model.updateText("Hello", height: 40)
+        model.undoManager.undo()
+        model.updateText("Stale", height: 40)
+        _ = try model.finishedContents()
+        XCTAssertNil(model.editingTextID)
+        XCTAssertTrue(try XCTUnwrap(model.document).annotations.isEmpty)
+        XCTAssertFalse(model.undoManager.canUndo)
+    }
+
+    @MainActor
+    func testEditingTextIsHiddenFromPreviewAndStyleIsOneUndoStep() async throws {
+        let model = try await editingModel()
+        defer { model.shutdown() }
+        model.beginText(model.newAnnotation(tool: .text, at: .zero))
+        model.updateText("Hello", height: 40)
+        model.beginAdjusting()
+        XCTAssertTrue(model.isAdjusting)
+        model.setStyle { $0.fontSize = 60; $0.italic = true }
+        model.endAdjusting()
+        XCTAssertFalse(model.isAdjusting)
+        XCTAssertEqual(model.document?.annotations.first?.fontSize, 60)
+        XCTAssertTrue(try XCTUnwrap(model.displayDocument).annotations.isEmpty)
+        let contents = try model.finishedContents()
+        XCTAssertEqual(contents.document.annotations.first?.text, "Hello")
+        XCTAssertEqual(model.displayDocument, model.document)
+        model.undoManager.undo()
+        XCTAssertTrue(try XCTUnwrap(model.document).annotations.isEmpty)
+        XCTAssertFalse(model.undoManager.canUndo)
+        model.undoManager.redo()
+        XCTAssertEqual(model.document, contents.document)
+    }
+
     func testCropRotateFlipGeometryRoundTrips() throws {
         var document = ImageDocument(size: CGSize(width: 100, height: 60))
         document.cropRect = CGRect(x: 10, y: 5, width: 60, height: 40)
@@ -234,6 +377,7 @@ final class ImageEditorTests: XCTestCase {
         defer { model.shutdown() }
         for _ in 0..<100 where model.document == nil { try await Task.sleep(for: .milliseconds(20)) }
         var document = try XCTUnwrap(model.document)
+        model.beginGesture()
         for index in 0..<100 {
             var annotation = ImageAnnotation(tool: .redact, rect: CGRect(x: 2, y: 2, width: 8, height: 6))
             annotation.color = AnnotationColor(red: 0, green: Double(index) / 99, blue: 0)
