@@ -6,7 +6,6 @@ import SwiftUI
 final class ImageCanvasView: NSView {
     let model: ImageEditorModel
     private var observation: AnyCancellable?
-    private var gestureSnapshot: ImageDocument?
     private var dragOperation: DragOperation?
     private var startPoint = CGPoint.zero
     private var currentPoint = CGPoint.zero
@@ -14,7 +13,6 @@ final class ImageCanvasView: NSView {
     private var spacePressed = false
     private var textEditor: AnnotationTextView?
     private var textContainer: NSScrollView?
-    private var editingAnnotation: ImageAnnotation?
     // stays fitted to the window until the user zooms
     private var fitsWindow = true
     private var lastFittedSize = CGSize.zero
@@ -310,7 +308,8 @@ final class ImageCanvasView: NSView {
         startPoint = point
         currentPoint = point
         lastWindowPoint = event.locationInWindow
-        gestureSnapshot = document
+        model.finishGesture()
+        model.beginGesture()
         if spacePressed { dragOperation = .pan; NSCursor.closedHand.set(); return }
         if let draft = model.cropDraft, let shown = model.displayDocument {
             let point = originalPoint(event, document: shown)
@@ -347,7 +346,7 @@ final class ImageCanvasView: NSView {
             needsDisplay = true
             return
         }
-        guard document.cropRect.contains(point) else { return }
+        guard document.cropRect.contains(point) else { model.cancelGesture(); return }
         // clicking an existing mark of the active tool picks it up instead of stacking a new one
         if model.tool != .crop, let hit = document.renderingAnnotations.last(where: { $0.tool == model.tool && $0.hitTest(point, tolerance: 6 / zoom) }) {
             model.select(hit.id)
@@ -356,13 +355,14 @@ final class ImageCanvasView: NSView {
             return
         }
         model.selectedIDs = []
-        if model.tool == .image { model.importImage(); return }
+        if model.tool == .image { model.finishGesture(); model.importImage(); return }
         if model.tool == .text { beginText(nil, at: point); return }
         var annotation = model.newAnnotation(tool: model.tool, at: point)
         if model.tool == .counter {
-            let side = max(32, model.fontSize * 1.6)
+            let side = max(32, model.style.fontSize * 1.6)
             annotation.rect = CGRect(x: point.x - side / 2, y: point.y - side / 2, width: side, height: side)
             model.mutate("Add Counter") { $0.annotations.append(annotation) }
+            model.finishGesture()
             model.selectedIDs = [annotation.id]
             return
         }
@@ -374,7 +374,7 @@ final class ImageCanvasView: NSView {
     }
 
     override func mouseDragged(with event: NSEvent) {
-        guard let operation = dragOperation, let snapshot = gestureSnapshot else { return }
+        guard let operation = dragOperation, let snapshot = model.gestureStart else { return }
         currentPoint = originalPoint(event, document: snapshot)
         let shift = event.modifierFlags.contains(.shift)
         switch operation {
@@ -446,20 +446,20 @@ final class ImageCanvasView: NSView {
     }
 
     override func mouseUp(with event: NSEvent) {
-        guard let operation = dragOperation, let snapshot = gestureSnapshot else { return }
+        guard let operation = dragOperation, let snapshot = model.gestureStart else { return }
         switch operation {
         case .draw(let id):
             if let item = model.document?.annotations.first(where: { $0.id == id }),
                max(item.bounds.width, item.bounds.height) < 2 {
-                model.cancelGesture(restoring: snapshot)
+                model.cancelGesture()
             } else {
                 if model.document?.annotations.first(where: { $0.id == id })?.tool == .highlight,
                    !event.modifierFlags.contains(.command) { model.snapHighlight(id) }
-                model.finishGesture(from: snapshot, action: "Add Annotation")
+                model.finishGesture(action: "Add Annotation")
                 if model.document?.annotations.contains(where: { $0.id == id }) == true { model.selectedIDs = [id] }
             }
-        case .move: model.finishGesture(from: snapshot, action: "Move")
-        case .resize: model.finishGesture(from: snapshot, action: "Resize")
+        case .move: model.finishGesture(action: "Move")
+        case .resize: model.finishGesture(action: "Resize")
         case .crop: break
         case .marquee:
             let rect = rectBetween(startPoint, currentPoint)
@@ -467,7 +467,7 @@ final class ImageCanvasView: NSView {
         case .pan: NSCursor.openHand.set()
         }
         dragOperation = nil
-        gestureSnapshot = nil
+        model.finishGesture()
         needsDisplay = true
     }
 
@@ -475,9 +475,9 @@ final class ImageCanvasView: NSView {
         guard let document = model.document else { return }
         var annotation = existing ?? model.newAnnotation(tool: .text, at: point)
         if existing == nil {
-            annotation.rect.size = CGSize(width: min(400, max(100, document.cropRect.maxX - point.x)), height: max(100, model.fontSize * 4))
+            annotation.rect.size = CGSize(width: min(400, max(100, document.cropRect.maxX - point.x)), height: max(100, model.style.fontSize * 4))
         }
-        editingAnnotation = annotation
+        model.beginText(annotation)
         let frame = annotation.rect.applying(document.originalToCanvas).offsetBy(dx: 40, dy: 40)
         // typing happens in place over the image, outlined but not boxed in white
         let scroll = NSScrollView(frame: frame)
@@ -490,6 +490,9 @@ final class ImageCanvasView: NSView {
         scroll.layer?.cornerRadius = 4
         let text = AnnotationTextView(frame: CGRect(origin: .zero, size: frame.size))
         text.isRichText = false
+        text.allowsUndo = false
+        text.documentUndoManager = model.undoManager
+        text.changed = { [weak self] in self?.updateEditingText() }
         applyStyle(annotation, to: text)
         text.drawsBackground = false
         text.string = annotation.text
@@ -506,12 +509,17 @@ final class ImageCanvasView: NSView {
         model.status = "⌘ Return to finish · Escape to cancel"
     }
 
-    // style changes made while typing land on the text being typed
-    func restyleEditingText(_ update: (inout ImageAnnotation) -> Void) {
-        guard var annotation = editingAnnotation, let textEditor else { return }
-        update(&annotation)
-        editingAnnotation = annotation
+    func restyleEditingText() {
+        guard let annotation = model.document?.annotations.first(where: { $0.id == model.editingTextID }), let textEditor else { return }
         applyStyle(annotation, to: textEditor)
+        updateEditingText()
+    }
+
+    func updateEditingText() {
+        guard let editor = textEditor, model.editingTextID != nil else { return }
+        editor.layoutManager?.ensureLayout(for: editor.textContainer!)
+        let used = editor.layoutManager?.usedRect(for: editor.textContainer!) ?? .zero
+        model.updateText(editor.string, height: max(model.style.fontSize * 1.4, used.height + 12))
     }
 
     private func applyStyle(_ annotation: ImageAnnotation, to text: NSTextView) {
@@ -520,30 +528,17 @@ final class ImageCanvasView: NSView {
         text.insertionPointColor = annotation.color.nsColor
     }
 
-    private func finishText(cancelled: Bool) {
-        guard let editor = textEditor, var annotation = editingAnnotation else { return }
-        if !cancelled, !editor.string.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            annotation.text = editor.string
-            let used = editor.layoutManager?.usedRect(for: editor.textContainer!) ?? .zero
-            annotation.rect.size.height = max(annotation.fontSize * 1.4, used.height + 12)
-            model.mutate("Edit Text") { document in
-                if let index = document.annotations.firstIndex(where: { $0.id == annotation.id }) { document.annotations[index] = annotation }
-                else { document.annotations.append(annotation) }
-            }
-            model.selectedIDs = [annotation.id]
-        }
+    private func finishText(cancelled: Bool) { model.finishText(cancelled: cancelled) }
+
+    func endEditingText() {
+        guard textEditor != nil else { return }
+        textEditor?.finish = nil
+        textEditor?.changed = nil
         textContainer?.removeFromSuperview()
         textContainer = nil
         textEditor = nil
-        editingAnnotation = nil
         model.status = ""
         window?.makeFirstResponder(self)
-    }
-
-    func commitEditing() {
-        finishText(cancelled: false)
-        // a pending crop counts once the image leaves the editor
-        if model.tool == .crop { model.tool = .select }
     }
 
     override func keyDown(with event: NSEvent) {
@@ -574,8 +569,7 @@ final class ImageCanvasView: NSView {
         switch event.keyCode {
         case 51, 117: model.deleteSelection()
         case 53:
-            if let snapshot = gestureSnapshot { model.cancelGesture(restoring: snapshot) }
-            gestureSnapshot = nil
+            model.cancelGesture()
             dragOperation = nil
             model.selectedIDs = []
             model.tool = .select
@@ -586,7 +580,7 @@ final class ImageCanvasView: NSView {
         default:
             if key == " " { spacePressed = true; NSCursor.openHand.set() }
             else if let digit = Int(key), AnnotationColor.palette.indices.contains(digit - 1) {
-                model.setColor(AnnotationColor.palette[digit - 1])
+                model.setStyle { $0.color = AnnotationColor.palette[digit - 1] }
             }
             else if let tool = AnnotationTool.allCases.first(where: { $0.keyboardKey == key }) {
                 if tool != .select { model.select(nil) }
@@ -636,14 +630,20 @@ final class ImageCanvasView: NSView {
 }
 
 private final class AnnotationTextView: NSTextView {
+    weak var documentUndoManager: UndoManager?
+    override var undoManager: UndoManager? { documentUndoManager }
     var finish: ((Bool) -> Void)?
+    var changed: (() -> Void)?
+    override func didChangeText() { super.didChangeText(); changed?() }
     override func resignFirstResponder() -> Bool {
         let resigned = super.resignFirstResponder()
         if resigned { DispatchQueue.main.async { [weak self] in self?.finish?(false) } }
         return resigned
     }
     override func keyDown(with event: NSEvent) {
-        if event.keyCode == 53 { finish?(true) }
+        if event.modifierFlags.contains(.command), event.charactersIgnoringModifiers?.lowercased() == "z" {
+            event.modifierFlags.contains(.shift) ? undoManager?.redo() : undoManager?.undo()
+        } else if event.keyCode == 53 { finish?(true) }
         else if event.keyCode == 36, event.modifierFlags.contains(.command) { finish?(false) }
         else { super.keyDown(with: event) }
     }
