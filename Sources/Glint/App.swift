@@ -488,6 +488,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     func edit(_ item: CaptureItem) {
         guard terminationTask == nil else { return }
+        // a capture already open comes forward instead of opening twice
+        if let key = editedCards.first(where: { $0.value.id == item.id })?.key,
+           let window = editors.compactMap(\.window).first(where: { ObjectIdentifier($0) == key }) {
+            window.makeKeyAndOrderFront(nil)
+            NSApp.activate(ignoringOtherApps: true)
+            return
+        }
         let url = item.url(in: library.root)
         guard FileManager.default.fileExists(atPath: url.path) else { showError(GlintError.message("This capture is no longer available.")); return }
         let card = EditedCard(id: item.id)
