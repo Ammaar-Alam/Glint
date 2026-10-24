@@ -31,6 +31,10 @@ enum CaptureAction: String, CaseIterable, Identifiable {
         Set(allCases.filter { defaults.bool(forKey: key($0, recording: recording)) })
     }
 
+    static func ordered(_ actions: Set<CaptureAction>) -> [CaptureAction] {
+        [.copy, .save, .editor, .popup].filter { actions.contains($0) }
+    }
+
     // carries the old single after-capture choice and copy toggle over, recordings land in the popup like screenshots
     static func migrate(_ defaults: UserDefaults = .standard) {
         if defaults.object(forKey: key(.popup, recording: false)) == nil {

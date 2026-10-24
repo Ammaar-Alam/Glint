@@ -87,7 +87,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 self?.editors.removeAll { $0.window === window }
                 if let card = self?.editedCards.removeValue(forKey: ObjectIdentifier(window)) {
                     card.closed = true
-                    if card.imports == 0 { self?.shelf.untuck(card.id) }
+                    self?.updateEditing(card)
                 }
                 self?.updateDock(closing: window)
             }
@@ -362,14 +362,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let actions = CaptureAction.enabled(recording: recording)
         if item.kind == .videoProject {
             deliverRecording(item, save: actions.contains(.save), copy: actions.contains(.copy))
-        } else {
-            if actions.contains(.copy) { copy(item) }
-            if actions.contains(.save) {
-                if let folder = CaptureFolder.current { saveToFolder(item, folder: folder) } else { save(item) }
+        }
+        for action in CaptureAction.ordered(actions) {
+            switch action {
+            case .copy: if item.kind != .videoProject { copy(item) }
+            case .save:
+                if item.kind != .videoProject {
+                    if let folder = CaptureFolder.current { saveToFolder(item, folder: folder) } else { save(item) }
+                }
+            case .editor: edit(item)
+            case .popup: shelf.present(item)
             }
         }
-        if actions.contains(.editor) { edit(item) }
-        if actions.contains(.popup) { shelf.present(item) }
     }
 
     // a failed style keeps the plain capture rather than losing it
@@ -528,10 +532,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
         editors.append(editor)
         if let window = editor.window { editedCards[ObjectIdentifier(window)] = card }
-        shelf.tuck(item)
+        updateEditing(card)
         editor.showWindow(nil)
         editor.window?.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
+    }
+
+    private func updateEditing(_ card: EditedCard) {
+        shelf.setEditing(card.id, !card.closed || card.imports > 0)
     }
 
     // each saved version replaces the card, which comes back once the editor closes and its last save lands
@@ -542,7 +550,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             defer {
                 pendingWrites -= 1
                 card.imports -= 1
-                if card.closed, card.imports == 0 { shelf.untuck(card.id) }
+                updateEditing(card)
             }
             do {
                 let item = try await library.ingest(url, title: url.deletingPathExtension().lastPathComponent)

@@ -65,6 +65,49 @@ final class LibraryTests: XCTestCase {
         XCTAssertEqual(shelf.ids, [second])
     }
 
+    func testCardPresentedAfterEditorOpensIsTucked() {
+        let id = UUID()
+        var shelf = ShelfState()
+        shelf.setEditing(id, true)
+        XCTAssertTrue(shelf.tucked.isEmpty)
+        shelf.insert(id)
+        XCTAssertEqual(shelf.tucked, [id])
+        shelf.dismiss(id)
+        shelf.reopen()
+        XCTAssertEqual(shelf.tucked, [id])
+        shelf.setEditing(id, false)
+        XCTAssertTrue(shelf.tucked.isEmpty)
+    }
+
+    func testEditReplacesPendingOriginalWithoutAddingAnotherCard() {
+        let original = UUID(), edited = UUID()
+        var shelf = ShelfState()
+        shelf.setEditing(original, true)
+        shelf.insert(original, deferred: true)
+        shelf.replace(original, with: edited)
+        XCTAssertEqual(shelf.pending, [edited])
+        XCTAssertTrue(shelf.ids.isEmpty)
+        XCTAssertEqual(shelf.editing, [edited])
+        for id in shelf.takePending() { shelf.insert(id) }
+        XCTAssertEqual(shelf.ids, [edited])
+        XCTAssertEqual(shelf.tucked, [edited])
+    }
+
+    func testAfterCaptureEditorThenPopupEndsTucked() {
+        XCTAssertEqual(CaptureAction.ordered(Set(CaptureAction.allCases)), [.copy, .save, .editor, .popup])
+        XCTAssertEqual(CaptureAction.ordered([]), [])
+        let id = UUID()
+        var shelf = ShelfState()
+        for action in CaptureAction.ordered([.editor, .popup]) {
+            switch action {
+            case .editor: shelf.setEditing(id, true)
+            case .popup: shelf.insert(id)
+            default: XCTFail("unexpected action")
+            }
+        }
+        XCTAssertEqual(shelf.tucked, [id])
+    }
+
     func testEditedCaptureTakesItsOriginalsPlace() {
         let first = UUID(), second = UUID(), edited = UUID(), gone = UUID(), fresh = UUID()
         var shelf = ShelfState()
