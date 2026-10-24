@@ -39,7 +39,7 @@ final class ImageEditorWindowController: NSWindowController, NSWindowDelegate, E
     // sized around the capture, within most of the screen and never below what the bars need
     private static func initialSize(for url: URL) -> NSSize {
         let screen = NSScreen.main ?? NSScreen.screens[0]
-        let chrome = NSSize(width: 2 * 76, height: 52 + 44 + 2 * 40)
+        let chrome = NSSize(width: 2 * 76, height: 52 + 44 + 2 * 56)
         var image = NSSize(width: 1200, height: 800)
         if let source = CGImageSourceCreateWithURL(url as CFURL, nil),
            let properties = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any],
@@ -330,7 +330,6 @@ private struct ImageEditorView: View {
     @ObservedObject var model: ImageEditorModel
     let actions: EditorActions
     @State private var sizePopover: ImageSizePopover?
-    @State private var openOptions: AnnotationTool?
     @Namespace private var toolSelection
 
     var body: some View {
@@ -344,7 +343,12 @@ private struct ImageEditorView: View {
                 }
                 .overlay(alignment: .leading) { ColorColumn(model: model).padding(.leading, 14) }
                 .overlay(alignment: .top) {
-                    if model.cropDraft != nil { cropBar.padding(.top, 14).transition(.opacity.combined(with: .offset(y: -8))) }
+                    Group {
+                        if model.cropDraft != nil { cropBar }
+                        else if let key = optionsKey { ToolOptionsBar(model: model, key: key).id(key) }
+                    }
+                    .padding(.top, 12)
+                    .transition(.opacity.combined(with: .offset(y: -6)))
                 }
                 if model.showsBackgroundPanel {
                     Divider()
@@ -357,6 +361,7 @@ private struct ImageEditorView: View {
         .ignoresSafeArea(.container, edges: .top)
         .animation(.easeOut(duration: 0.18), value: model.showsBackgroundPanel)
         .animation(.easeOut(duration: 0.18), value: model.cropDraft != nil)
+        .animation(.easeOut(duration: 0.16), value: optionsKey)
         .alert("Couldn’t finish", isPresented: Binding(get: { model.errorMessage != nil }, set: { if !$0 { model.errorMessage = nil } })) {
             Button("OK") { model.errorMessage = nil }
         } message: { Text(model.errorMessage ?? "") }
@@ -396,31 +401,19 @@ private struct ImageEditorView: View {
         .disabled(model.document == nil || model.busy)
     }
 
-    // the strip never changes shape, each tool's options open from the tool itself
+    // the strip never changes shape, the active tool's options float over the canvas
     private var toolStrip: some View {
         HStack(spacing: 2) {
             ForEach(EditorTools.strip) { key in
                 let selected = EditorTools.members(key).contains(model.tool)
-                Button { tap(key) } label: { Image(systemName: EditorTools.symbol(key, active: model.tool)) }
+                Button { if !selected { select(EditorTools.remembered(key)) } } label: { Image(systemName: EditorTools.symbol(key, active: model.tool)) }
                     .buttonStyle(ToolButtonStyle(selected: selected, size: CGSize(width: 34, height: 30), prominent: true, drawsSelection: false))
-                    .overlay(alignment: .bottomTrailing) {
-                        if EditorTools.withOptions.contains(key) {
-                            Image(systemName: "arrowtriangle.down.fill")
-                                .font(.system(size: 5))
-                                .foregroundStyle(selected ? Color.white.opacity(0.85) : Color.secondary)
-                                .padding(3)
-                                .allowsHitTesting(false)
-                        }
-                    }
                     .background {
                         if selected {
                             RoundedRectangle(cornerRadius: Radius.control, style: .continuous)
                                 .fill(Color.glint)
                                 .matchedGeometryEffect(id: "tool", in: toolSelection)
                         }
-                    }
-                    .popover(isPresented: Binding(get: { openOptions == key }, set: { if !$0 { openOptions = nil } }), arrowEdge: .bottom) {
-                        ToolOptions(model: model, key: key)
                     }
                     .help(Self.help(key))
                     .accessibilityLabel(key == .pixelate ? "Redact" : key.title)
@@ -433,10 +426,12 @@ private struct ImageEditorView: View {
         .fixedSize()
     }
 
-    // a click picks the tool and drops down its options
-    private func tap(_ key: AnnotationTool) {
-        if !EditorTools.members(key).contains(model.tool) { select(EditorTools.remembered(key)) }
-        openOptions = EditorTools.withOptions.contains(key) && openOptions != key ? key : nil
+    // the tool whose options show, from the selection when there is one
+    private var optionsKey: AnnotationTool? {
+        let tools = model.selectedIDs.isEmpty ? [model.tool] : model.selectedAnnotations.map(\.tool)
+        let keys = Set(tools.map(EditorTools.family(of:)))
+        guard keys.count == 1, let key = keys.first, EditorTools.withOptions.contains(key) else { return nil }
+        return key
     }
 
     private static func help(_ key: AnnotationTool) -> String {
@@ -544,59 +539,69 @@ private struct ImageEditorView: View {
     }
 }
 
-// a tool's own options in a popover, applied to the selection as well
-private struct ToolOptions: View {
+// options for the active tool or the selected marks, floating at the top of the canvas
+private struct ToolOptionsBar: View {
     @ObservedObject var model: ImageEditorModel
     let key: AnnotationTool
 
+    private var active: Set<AnnotationTool> { model.selectedIDs.isEmpty ? [model.tool] : Set(model.selectedAnnotations.map(\.tool)) }
+
     var body: some View {
-        VStack(alignment: .leading, spacing: 14) {
+        Island {
             if key == .arrow {
-                HStack(spacing: 4) {
-                    ForEach(Self.arrows, id: \.name) { preset in
-                        let selected = model.tool == preset.tool && (preset.tool == .line || model.arrowStyle == preset.style)
-                        Button { chooseArrow(preset.tool, style: preset.style) } label: {
-                            ArrowPreview(tool: preset.tool, style: preset.style, color: model.color).frame(width: 40, height: 28)
-                        }
-                        .buttonStyle(ToolButtonStyle(selected: selected, size: CGSize(width: 46, height: 40)))
-                        .help(preset.name)
+                ForEach(Self.arrows, id: \.name) { preset in
+                    let selected = active.contains(preset.tool) && (preset.tool == .line || model.arrowStyle == preset.style)
+                    Button { chooseArrow(preset.tool, style: preset.style) } label: {
+                        ArrowPreview(tool: preset.tool, style: preset.style, color: model.color).frame(width: 26, height: 18)
                     }
+                    .buttonStyle(ToolButtonStyle(selected: selected, size: CGSize(width: 36, height: 28)))
+                    .help(preset.name)
+                    .accessibilityLabel(preset.name)
                 }
+                BarDivider()
             } else if let variants = EditorTools.families[key] {
-                HStack(spacing: 4) {
-                    ForEach(variants) { variant in
-                        Button { choose(variant) } label: {
-                            VStack(spacing: 5) {
-                                Image(systemName: variant == .redact ? "rectangle.fill" : variant.symbol).font(.system(size: 15, weight: .medium))
-                                Text(Self.label(variant)).font(.system(size: 10, weight: .medium))
-                            }
+                ForEach(variants) { variant in
+                    Button { choose(variant) } label: {
+                        HStack(spacing: 5) {
+                            Image(systemName: variant == .redact ? "rectangle.fill" : variant.symbol)
+                            Text(Self.label(variant))
                         }
-                        .buttonStyle(ToolButtonStyle(selected: model.tool == variant, size: CGSize(width: 58, height: 48)))
+                        .font(.system(size: 12, weight: .medium))
+                        .padding(.horizontal, 10)
                     }
+                    .buttonStyle(ToolButtonStyle(selected: active.contains(variant), size: CGSize(width: 0, height: 28)))
+                    .fixedSize()
                 }
+                if key != .pixelate || !active.contains(.redact) { BarDivider() }
             }
             switch key {
-            case .arrow, .rectangle, .pen:
-                slider("Thickness", in: 1...40)
-                if key == .rectangle { toggle("Fill", isOn: model.filled) { setFilled($0) } }
+            case .arrow, .pen:
+                slider(symbol: "lineweight", help: "Thickness", in: 1...40)
+            case .rectangle:
+                slider(symbol: "lineweight", help: "Thickness", in: 1...40)
+                Button { setFilled(!model.filled) } label: { Image(systemName: model.filled ? "square.fill" : "square") }
+                    .buttonStyle(ToolButtonStyle(selected: model.filled)).help("Fill")
             case .pixelate:
-                if model.tool == .redact { Text("Covers with the color on the left").font(.system(size: 12)).foregroundStyle(.secondary) }
-                else { slider("Strength", in: 2...40) }
+                if !active.contains(.redact) { slider(symbol: "aqi.medium", help: "Strength", in: 2...40) }
             case .text:
                 stepper
-                HStack(spacing: 6) {
-                    Button { model.bold.toggle(); let value = model.bold; model.changeStyle { $0.bold = value } } label: { Image(systemName: "bold") }
-                        .buttonStyle(ToolButtonStyle(selected: model.bold)).help("Bold")
-                    Button { model.italic.toggle(); let value = model.italic; model.changeStyle { $0.italic = value } } label: { Image(systemName: "italic") }
-                        .buttonStyle(ToolButtonStyle(selected: model.italic)).help("Italic")
-                }
+                BarDivider()
+                Button { model.bold.toggle(); let value = model.bold; model.changeStyle { $0.bold = value } } label: { Image(systemName: "bold") }
+                    .buttonStyle(ToolButtonStyle(selected: model.bold)).help("Bold")
+                Button { model.italic.toggle(); let value = model.italic; model.changeStyle { $0.italic = value } } label: { Image(systemName: "italic") }
+                    .buttonStyle(ToolButtonStyle(selected: model.italic)).help("Italic")
             case .counter: stepper
-            case .highlight: toggle("Snap to text", isOn: model.smartHighlight) { model.smartHighlight = $0 }
+            case .highlight:
+                Button { model.smartHighlight.toggle() } label: {
+                    HStack(spacing: 5) { Image(systemName: "text.viewfinder"); Text("Snap to text") }
+                        .font(.system(size: 12, weight: .medium))
+                        .padding(.horizontal, 10)
+                }
+                .buttonStyle(ToolButtonStyle(selected: model.smartHighlight, size: CGSize(width: 0, height: 28)))
+                .fixedSize()
             default: EmptyView()
             }
         }
-        .padding(14)
-        .frame(width: key == .arrow ? 274 : 252, alignment: .leading)
     }
 
     private static let arrows: [(name: String, tool: AnnotationTool, style: ArrowStyle)] = [
@@ -618,9 +623,6 @@ private struct ToolOptions: View {
 
     private static func label(_ tool: AnnotationTool) -> String {
         switch tool {
-        case .arrow: return "Arrow"
-        case .doubleArrow: return "Double"
-        case .line: return "Line"
         case .rectangle: return "Box"
         case .ellipse: return "Oval"
         case .blur: return "Blur"
@@ -640,41 +642,29 @@ private struct ToolOptions: View {
         }
     }
 
-    private func slider(_ title: String, in range: ClosedRange<Double>) -> some View {
-        VStack(alignment: .leading, spacing: 6) {
-            HStack {
-                Text(title).font(.system(size: 12, weight: .medium))
-                Spacer()
-                Text("\(Int(model.lineWidth))").font(.system(size: 12).monospacedDigit()).foregroundStyle(.secondary)
-            }
+    private func slider(symbol: String, help: String, in range: ClosedRange<Double>) -> some View {
+        HStack(spacing: 8) {
+            Image(systemName: symbol).font(.system(size: 12, weight: .medium)).foregroundStyle(.secondary)
             Slider(value: Binding(get: { min(range.upperBound, max(range.lowerBound, model.lineWidth)) }, set: { setLineWidth($0.rounded()) }), in: range) { editing in
                 if editing { model.beginAdjusting() } else { model.endAdjusting() }
             }
             .controlSize(.small)
+            .frame(width: 110)
+            Text("\(Int(model.lineWidth))").font(.system(size: 12, weight: .medium).monospacedDigit()).foregroundStyle(.secondary).frame(width: 20, alignment: .trailing)
         }
-    }
-
-    private func toggle(_ title: String, isOn: Bool, set: @escaping (Bool) -> Void) -> some View {
-        HStack {
-            Text(title).font(.system(size: 12, weight: .medium))
-            Spacer()
-            Toggle(title, isOn: Binding(get: { isOn }, set: set)).labelsHidden().toggleStyle(FlatToggleStyle())
-        }
+        .padding(.horizontal, 8)
+        .help(help)
     }
 
     private var stepper: some View {
-        HStack {
-            Text("Size").font(.system(size: 12, weight: .medium))
-            Spacer()
-            HStack(spacing: 0) {
-                Button { setFontSize(model.fontSize - 2) } label: { Image(systemName: "minus") }
-                    .buttonStyle(ToolButtonStyle(size: CGSize(width: 26, height: 26)))
-                Text("\(Int(model.fontSize))").font(.system(size: 12, weight: .semibold).monospacedDigit()).frame(width: 30)
-                Button { setFontSize(model.fontSize + 2) } label: { Image(systemName: "plus") }
-                    .buttonStyle(ToolButtonStyle(size: CGSize(width: 26, height: 26)))
-            }
-            .padding(2)
-            .background(Color.primary.opacity(0.06), in: RoundedRectangle(cornerRadius: Radius.control + 2, style: .continuous))
+        HStack(spacing: 0) {
+            Button { setFontSize(model.fontSize - 2) } label: { Image(systemName: "textformat.size.smaller") }
+                .buttonStyle(ToolButtonStyle(size: CGSize(width: 30, height: 28))).help("Smaller")
+            Text("\(Int(model.fontSize))").font(.system(size: 12, weight: .semibold).monospacedDigit()).frame(width: 32)
+                .contentTransition(.numericText())
+                .animation(.snappy(duration: 0.18), value: model.fontSize)
+            Button { setFontSize(model.fontSize + 2) } label: { Image(systemName: "textformat.size.larger") }
+                .buttonStyle(ToolButtonStyle(size: CGSize(width: 30, height: 28))).help("Larger")
         }
     }
 
@@ -846,109 +836,126 @@ private struct BackgroundPanel: View {
 
     var body: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 20) {
+            VStack(alignment: .leading, spacing: 24) {
                 HStack {
-                    Text("Background").font(.headline)
+                    Text("Background").font(.system(size: 13, weight: .semibold))
                     Spacer()
                     Toggle("Background", isOn: binding(\.enabled)).toggleStyle(FlatToggleStyle()).labelsHidden()
                 }
                 LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 8), count: 4), spacing: 8) {
                     ForEach(0..<Wallpaper.count, id: \.self) { index in
-                        Button { applyWallpaper(index) } label: {
-                            Image(nsImage: Wallpaper.thumbnails[index])
-                                .resizable()
-                                .aspectRatio(contentMode: .fill)
-                                .frame(height: 40)
-                                .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
-                                .overlay(RoundedRectangle(cornerRadius: 8, style: .continuous).strokeBorder(Color.primary.opacity(0.1)))
-                                .padding(2)
-                                .overlay(RoundedRectangle(cornerRadius: 10, style: .continuous).strokeBorder(background.enabled && background.imageID == Wallpaper.id(index) ? Color.glint : .clear, lineWidth: 2))
-                                .contentShape(Rectangle())
+                        swatch(selected: background.enabled && background.imageID == Wallpaper.id(index)) { applyWallpaper(index) } content: {
+                            Image(nsImage: Wallpaper.thumbnails[index]).resizable().aspectRatio(contentMode: .fill)
                         }
-                        .buttonStyle(.plain)
                         .help(Wallpaper.names[index])
                         .accessibilityLabel(Wallpaper.names[index])
-                    }
-                    ForEach(Array(model.backgroundPresets.enumerated()), id: \.offset) { index, preset in
-                        tile(top: preset.color, bottom: preset.gradient ? preset.secondColor : preset.color, selected: background == preset) {
-                            wallpaperRequest = nil
-                            model.applyBackgroundPreset(preset)
-                        }
-                        .overlay(alignment: .bottomTrailing) {
-                            Image(systemName: "star.fill").font(.system(size: 8)).foregroundStyle(.white).padding(4).shadow(radius: 1)
-                        }
-                        .contextMenu { Button("Remove") { model.removeBackgroundPreset(at: index) } }
-                        .accessibilityLabel("Saved style \(index + 1)")
                     }
                     Button { model.chooseBackgroundImage() } label: {
                         RoundedRectangle(cornerRadius: 8, style: .continuous)
                             .strokeBorder(Color.primary.opacity(0.2), style: StrokeStyle(lineWidth: 1, dash: [3, 3]))
-                            .overlay(Image(systemName: "photo").foregroundStyle(.secondary))
+                            .overlay(Image(systemName: "photo.badge.plus").foregroundStyle(.secondary))
                             .frame(height: 40)
+                            .padding(2)
                             .contentShape(Rectangle())
                     }
                     .buttonStyle(.plain)
                     .help("Choose Image")
                 }
-                Group {
-                    HStack {
-                        Text("Colors")
+                saved
+                VStack(alignment: .leading, spacing: 14) {
+                    HStack(spacing: 6) {
+                        Text("Fill")
                         Spacer()
                         ColorWellButton(color: background.color.nsColor) { setColor(\.color, $0) }
                         if background.gradient {
                             ColorWellButton(color: background.secondColor.nsColor) { setColor(\.secondColor, $0) }
+                                .transition(.scale(scale: 0.6).combined(with: .opacity))
                         }
                         Button { model.mutate("Background") { $0.background.gradient.toggle() } } label: { Image(systemName: "circle.lefthalf.filled") }
-                            .buttonStyle(ToolButtonStyle(selected: background.gradient)).help("Gradient")
+                            .buttonStyle(ToolButtonStyle(selected: background.gradient, size: CGSize(width: 28, height: 26))).help("Gradient")
                     }
-                    if background.imageID != nil {
+                    .animation(.snappy(duration: 0.2), value: background.gradient)
+                    if let id = background.imageID, Wallpaper.index(of: id) == nil {
                         Button("Remove Image") { model.mutate("Remove Background Image") { $0.background.imageID = nil } }
                             .buttonStyle(SecondaryButtonStyle())
                     }
                     slider("Padding", value: binding(\.padding), range: 0...300)
-                    slider("Inset", value: Binding(get: { background.inset ?? 0 }, set: { value in model.mutate("Inset") { $0.background.inset = value } }), range: 0...100)
-                    if (background.inset ?? 0) > 0 {
-                        HStack {
-                            Text("Inset Color")
-                            Spacer()
+                    slider("Inset", value: Binding(get: { background.inset ?? 0 }, set: { value in model.mutate("Inset") { $0.background.inset = value } }), range: 0...100) {
+                        if (background.inset ?? 0) > 0 {
                             ColorWellButton(color: (background.insetColor ?? .white).nsColor) { value in
                                 model.mutate("Inset Color") { $0.background.insetColor = AnnotationColor(value) }
                             }
+                            .frame(height: 16)
                         }
                     }
                     slider("Corners", value: binding(\.cornerRadius), range: 0...100)
                     slider("Shadow", value: binding(\.shadow), range: 0...100)
-                    VStack(alignment: .leading, spacing: 8) {
-                        Text("Ratio")
-                        HStack(spacing: 2) {
-                            ForEach(Self.ratios, id: \.title) { title, ratio in
-                                Button(title) { model.mutate("Background") { $0.background.aspectRatio = ratio } }
-                                    .buttonStyle(ToolButtonStyle(selected: background.aspectRatio == ratio, size: CGSize(width: 44, height: 26)))
-                                    .font(.system(size: 11, weight: .medium))
-                            }
-                        }
-                    }
-                    VStack(alignment: .leading, spacing: 8) {
-                        Text("Position")
-                        HStack(spacing: 2) {
-                            alignButton("align.horizontal.left", "Left") { model.alignContent(x: -1) }
-                            alignButton("align.horizontal.right", "Right") { model.alignContent(x: 1) }
-                            alignButton("align.vertical.top", "Top") { model.alignContent(y: -1) }
-                            alignButton("align.vertical.bottom", "Bottom") { model.alignContent(y: 1) }
-                            alignButton("scope", "Center") { model.alignContent(x: 0, y: 0) }
-                        }
-                    }
-                    Button("Save Style") { model.saveBackgroundPreset() }
-                        .buttonStyle(SecondaryButtonStyle())
                 }
-                .disabled(!background.enabled)
-                .opacity(background.enabled ? 1 : 0.45)
+                VStack(alignment: .leading, spacing: 10) {
+                    section("Layout")
+                    HStack(spacing: 2) {
+                        ForEach(Self.ratios, id: \.title) { title, ratio in
+                            Button(title) { model.mutate("Background") { $0.background.aspectRatio = ratio } }
+                                .buttonStyle(ToolButtonStyle(selected: background.aspectRatio == ratio, size: CGSize(width: 44, height: 26)))
+                                .font(.system(size: 11, weight: .medium))
+                        }
+                    }
+                    HStack(spacing: 2) {
+                        alignButton("align.horizontal.left", "Left") { model.alignContent(x: -1) }
+                        alignButton("align.horizontal.right", "Right") { model.alignContent(x: 1) }
+                        alignButton("align.vertical.top", "Top") { model.alignContent(y: -1) }
+                        alignButton("align.vertical.bottom", "Bottom") { model.alignContent(y: 1) }
+                        alignButton("scope", "Center") { model.alignContent(x: 0, y: 0) }
+                    }
+                }
             }
             .font(.system(size: 12))
             .padding(16)
         }
+        // scrolled content stays under the editor's top bar
+        .clipped()
         .background(.bar, ignoresSafeAreaEdges: [])
         .disabled(model.document == nil || model.busy)
+    }
+
+    // looks you keep, drawn as a small framed capture so they read as styles, not plain colors
+    private var saved: some View {
+        let isSaved = model.backgroundPresets.contains(background)
+        return VStack(alignment: .leading, spacing: 10) {
+            HStack {
+                section("Saved")
+                Spacer()
+                Button { withAnimation(.snappy(duration: 0.25)) { model.saveBackgroundPreset() } } label: {
+                    Label(isSaved ? "Saved" : "Save", systemImage: isSaved ? "checkmark" : "plus")
+                        .font(.system(size: 11, weight: .semibold))
+                        .contentTransition(.symbolEffect(.replace))
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(isSaved ? Color.secondary : Color.glint)
+                .disabled(isSaved || !background.enabled)
+                .help("Save this look")
+            }
+            if model.backgroundPresets.isEmpty {
+                Text("Keep a look to use it on any capture").font(.system(size: 11)).foregroundStyle(.secondary)
+            } else {
+                LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 8), count: 3), spacing: 8) {
+                    ForEach(Array(model.backgroundPresets.enumerated()), id: \.offset) { index, preset in
+                        swatch(selected: background == preset, height: 48) {
+                            wallpaperRequest = nil
+                            model.applyBackgroundPreset(preset)
+                        } content: { StylePreview(style: preset) }
+                        .contextMenu { Button("Remove") { withAnimation(.snappy(duration: 0.25)) { model.removeBackgroundPreset(at: index) } } }
+                        .accessibilityLabel("Saved style \(index + 1)")
+                        .transition(.scale(scale: 0.85).combined(with: .opacity))
+                    }
+                }
+            }
+        }
+        .animation(.snappy(duration: 0.25), value: model.backgroundPresets.count)
+    }
+
+    private func section(_ title: String) -> some View {
+        Text(title).font(.system(size: 11, weight: .semibold)).foregroundStyle(.secondary)
     }
 
     private func applyWallpaper(_ index: Int) {
@@ -968,23 +975,26 @@ private struct BackgroundPanel: View {
         }
     }
 
-    private func tile(top: AnnotationColor, bottom: AnnotationColor, selected: Bool, action: @escaping () -> Void) -> some View {
+    private func swatch<Content: View>(selected: Bool, height: CGFloat = 40, action: @escaping () -> Void, @ViewBuilder content: () -> Content) -> some View {
         Button(action: action) {
-            RoundedRectangle(cornerRadius: 8, style: .continuous)
-                .fill(LinearGradient(colors: [Color(nsColor: top.nsColor), Color(nsColor: bottom.nsColor)], startPoint: .topLeading, endPoint: .bottomTrailing))
+            content()
+                .frame(height: height)
+                .frame(maxWidth: .infinity)
+                .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
                 .overlay(RoundedRectangle(cornerRadius: 8, style: .continuous).strokeBorder(Color.primary.opacity(0.1)))
                 .padding(2)
                 .overlay(RoundedRectangle(cornerRadius: 10, style: .continuous).strokeBorder(selected ? Color.glint : .clear, lineWidth: 2))
-                .frame(height: 44)
+                .animation(.easeOut(duration: 0.15), value: selected)
                 .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
     }
 
-    private func slider(_ title: String, value: Binding<Double>, range: ClosedRange<Double>) -> some View {
+    private func slider<Accessory: View>(_ title: String, value: Binding<Double>, range: ClosedRange<Double>, @ViewBuilder accessory: () -> Accessory = { EmptyView() }) -> some View {
         VStack(alignment: .leading, spacing: 4) {
-            HStack {
+            HStack(spacing: 6) {
                 Text(title)
+                accessory()
                 Spacer()
                 Text("\(Int(value.wrappedValue))").monospacedDigit().foregroundStyle(.secondary)
             }
@@ -1004,8 +1014,38 @@ private struct BackgroundPanel: View {
         Binding(get: { background[keyPath: keyPath] }, set: { value in model.mutate("Background") { $0.background[keyPath: keyPath] = value } })
     }
 
+    // a picked fill replaces any wallpaper, which would otherwise hide it
     private func setColor(_ keyPath: WritableKeyPath<ImageBackground, AnnotationColor>, _ color: NSColor) {
-        model.mutate("Background Color") { $0.background[keyPath: keyPath] = AnnotationColor(color) }
+        model.mutate("Background Color") {
+            $0.background[keyPath: keyPath] = AnnotationColor(color)
+            $0.background.imageID = nil
+            $0.background.enabled = true
+        }
+    }
+}
+
+// a saved look as a tiny framed capture on its own backdrop
+private struct StylePreview: View {
+    let style: ImageBackground
+
+    var body: some View {
+        GeometryReader { proxy in
+            let height = proxy.size.height
+            ZStack {
+                if let id = style.imageID, let index = Wallpaper.index(of: id) {
+                    Image(nsImage: Wallpaper.thumbnails[index]).resizable().aspectRatio(contentMode: .fill)
+                } else if style.imageID != nil {
+                    Color.primary.opacity(0.12).overlay(Image(systemName: "photo").font(.system(size: 10)).foregroundStyle(.secondary))
+                } else {
+                    LinearGradient(colors: [Color(nsColor: style.color.nsColor), Color(nsColor: (style.gradient ? style.secondColor : style.color).nsColor)],
+                                   startPoint: .topLeading, endPoint: .bottomTrailing)
+                }
+                RoundedRectangle(cornerRadius: max(1.5, style.cornerRadius / 100 * 7), style: .continuous)
+                    .fill(Color.white)
+                    .shadow(color: .black.opacity(0.1 + style.shadow / 100 * 0.25), radius: 1 + style.shadow / 100 * 3, y: 1)
+                    .padding(min(height * 0.32, 4 + style.padding / 300 * height * 0.4))
+            }
+        }
     }
 }
 

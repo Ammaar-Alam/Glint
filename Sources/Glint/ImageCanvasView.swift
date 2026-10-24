@@ -81,9 +81,9 @@ final class ImageCanvasView: NSView {
         updateCanvasSizeWithoutFitting()
         guard let scroll = enclosingScrollView, model.document != nil else { return }
         fitsWindow = true
-        // screen margins clear the color column on the left, mirrored on the right to stay centered
+        // margins clear the color column on the left and the options bar on top, mirrored to stay centered
         guard let size = model.displayDocument?.canvasSize, size.width > 0, size.height > 0 else { return }
-        let room = CGSize(width: scroll.contentSize.width - 2 * 76, height: scroll.contentSize.height - 2 * 40)
+        let room = CGSize(width: scroll.contentSize.width - 2 * 76, height: scroll.contentSize.height - 2 * 56)
         let level = min(room.width / size.width, room.height / size.height)
         scroll.setMagnification(min(scroll.maxMagnification, max(scroll.minMagnification, level)), centeredAt: CGPoint(x: bounds.midX, y: bounds.midY))
         updateZoomLabel()
