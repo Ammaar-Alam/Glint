@@ -76,7 +76,8 @@ private struct ToolButtonLabel: View {
     var body: some View {
         configuration.label
             .font(.system(size: 14, weight: .medium))
-            .frame(width: size.width, height: size.height)
+            // a zero width lets a labeled button size to its content
+            .frame(width: size.width > 0 ? size.width : nil, height: size.height)
             .foregroundStyle(selected ? (prominent ? Color.white : tint) : Color.primary.opacity(enabled ? 0.85 : 0.3))
             .background(
                 RoundedRectangle(cornerRadius: Radius.control, style: .continuous)
