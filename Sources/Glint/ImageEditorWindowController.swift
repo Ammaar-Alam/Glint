@@ -13,7 +13,7 @@ final class ImageEditorWindowController: NSWindowController, NSWindowDelegate, E
 
     init(url: URL, onExport: @escaping (URL) -> Void) {
         model = ImageEditorModel(url: url, onExport: onExport)
-        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1200, height: 800),
+        let window = NSWindow(contentRect: NSRect(origin: .zero, size: Self.initialSize(for: url)),
                               styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView],
                               backing: .buffered, defer: false)
         window.title = "\(url.deletingPathExtension().lastPathComponent) — Glint"
@@ -22,7 +22,7 @@ final class ImageEditorWindowController: NSWindowController, NSWindowDelegate, E
         // an empty unified toolbar gives the title bar the height of the editor's top bar
         window.toolbar = NSToolbar(identifier: "ImageEditor")
         window.toolbarStyle = .unified
-        window.minSize = NSSize(width: 1100, height: 620)
+        window.minSize = NSSize(width: 900, height: 560)
         window.isReleasedWhenClosed = false
         window.tabbingMode = .disallowed
         super.init(window: window)
@@ -34,6 +34,21 @@ final class ImageEditorWindowController: NSWindowController, NSWindowDelegate, E
             share: { [weak self] in self?.share() }, flatten: { [weak self] in await self?.flattenedFile() })))
         model.onSaveProject = { [weak self] in self?.saveProject() }
         window.center()
+    }
+
+    // sized around the capture, within most of the screen and never below what the bars need
+    private static func initialSize(for url: URL) -> NSSize {
+        let screen = NSScreen.main ?? NSScreen.screens[0]
+        let chrome = NSSize(width: 2 * 76, height: 52 + 44 + 2 * 40)
+        var image = NSSize(width: 1200, height: 800)
+        if let source = CGImageSourceCreateWithURL(url as CFURL, nil),
+           let properties = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any],
+           let width = properties[kCGImagePropertyPixelWidth] as? CGFloat, let height = properties[kCGImagePropertyPixelHeight] as? CGFloat, width > 0, height > 0 {
+            image = NSSize(width: width / screen.backingScaleFactor, height: height / screen.backingScaleFactor)
+        }
+        let room = NSSize(width: screen.visibleFrame.width * 0.8 - chrome.width, height: screen.visibleFrame.height * 0.85 - chrome.height)
+        let scale = min(1, room.width / image.width, room.height / image.height)
+        return NSSize(width: max(900, (image.width * scale + chrome.width).rounded()), height: max(560, (image.height * scale + chrome.height).rounded()))
     }
 
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }

@@ -81,8 +81,11 @@ final class ImageCanvasView: NSView {
         updateCanvasSizeWithoutFitting()
         guard let scroll = enclosingScrollView, model.document != nil else { return }
         fitsWindow = true
-        // leave room for the floating options and zoom controls
-        scroll.magnify(toFit: bounds.insetBy(dx: -24, dy: -56))
+        // screen margins clear the color column on the left, mirrored on the right to stay centered
+        guard let size = model.displayDocument?.canvasSize, size.width > 0, size.height > 0 else { return }
+        let room = CGSize(width: scroll.contentSize.width - 2 * 76, height: scroll.contentSize.height - 2 * 40)
+        let level = min(room.width / size.width, room.height / size.height)
+        scroll.setMagnification(min(scroll.maxMagnification, max(scroll.minMagnification, level)), centeredAt: CGPoint(x: bounds.midX, y: bounds.midY))
         updateZoomLabel()
     }
 
@@ -146,6 +149,10 @@ final class ImageCanvasView: NSView {
         }
         if let preview = model.preview { ImageRenderer.drawImage(preview, in: imageRect, context: context) }
         context.restoreGState()
+        // a hairline keeps light captures from melting into the backdrop
+        context.setStrokeColor(CGColor(gray: 0, alpha: 0.14))
+        context.setLineWidth(1 / zoom)
+        context.stroke(imageRect.insetBy(dx: -0.5 / zoom, dy: -0.5 / zoom))
 
         if let draft = model.cropDraft { drawCrop(draft, document: document, imageRect: imageRect, context: context) }
         if let bounds = model.selectionBounds, textEditor == nil, model.cropDraft == nil {
