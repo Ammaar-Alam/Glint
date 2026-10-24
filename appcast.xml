@@ -2,5 +2,14 @@
 <rss version="2.0" xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle">
   <channel>
     <title>Glint</title>
+    <item>
+      <title>0.3.0</title>
+      <pubDate>Sat, 24 Oct 2026 03:40:11 +0000</pubDate>
+      <sparkle:version>3</sparkle:version>
+      <sparkle:shortVersionString>0.3.0</sparkle:shortVersionString>
+      <sparkle:minimumSystemVersion>26.0</sparkle:minimumSystemVersion>
+      <link>https://github.com/Ammaar-Alam/Glint/releases/tag/0.3.0</link>
+      <enclosure url="https://github.com/Ammaar-Alam/Glint/releases/download/0.3.0/Glint-0.3.0.dmg" type="application/octet-stream" sparkle:edSignature="s0GcYzphZNgmDk83GuVId95vGNlkQ0vSIA0IGjpksgWm/jl2oNV0PSoGBObV6iANDajJCH26jZADoYj9Bds2DA==" length="4045808"/>
+    </item>
   </channel>
 </rss>
