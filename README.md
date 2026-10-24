@@ -67,7 +67,7 @@ Projects keep the original pixels under redactions. Share exported images, not p
 
 ## Install
 
-Download the DMG from [Releases](https://github.com/Ammaar-Alam/Glint/releases/latest) and drag Glint to Applications. Requires macOS 27.
+Download the DMG from [Releases](https://github.com/Ammaar-Alam/Glint/releases/latest) and drag Glint to Applications. Requires macOS 26 or later.
 
 Glint walks you through Screen Recording access on first launch. To use the screenshot keys, turn off **Screenshots** in System Settings → Keyboard → Keyboard Shortcuts.
 
@@ -85,7 +85,7 @@ All shortcuts can be changed in Settings.
 
 ## Build
 
-Requires macOS 27 and Xcode 27.
+Requires macOS 26 or later and Xcode 26 or later.
 
 ```sh
 scripts/build-app.sh

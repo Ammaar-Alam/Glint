@@ -14,7 +14,11 @@ concurrency:
 
 jobs:
   macos:
-    runs-on: xcode-27
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [xcode-27, macos-26]
+    runs-on: ${{ matrix.runner }}
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v7.0.1
