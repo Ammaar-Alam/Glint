@@ -171,7 +171,9 @@ final class QuickAccessPanel: NSPanel {
         guard !moving.isEmpty else { return }
         // the panel spans the old spots while they move so nothing is clipped, then shrinks back
         let resting = frame
-        let span = moving.reduce(resting) { $0.union($1.from) }
+        // only the height grows, a tucked card's old spot past the edge must not shift the panel sideways
+        let reach = moving.reduce(resting) { $0.union($1.from) }
+        let span = CGRect(x: resting.minX, y: reach.minY, width: resting.width, height: reach.height)
         let lift = resting.minY - span.minY
         setFrame(span, display: false)
         for view in container.subviews { view.setFrameOrigin(CGPoint(x: view.frame.minX, y: view.frame.minY + lift)) }
