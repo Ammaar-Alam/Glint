@@ -212,6 +212,10 @@ final class QuickAccessPanel: NSPanel {
             switch command {
             case .close: self?.dismiss(item)
             case .closeAll: self?.dismissAll()
+            // the capture moves into the editor, so its card steps aside
+            case .edit:
+                self?.interact { self?.onCommand?(command, item) }
+                self?.dismiss(item)
             default: self?.interact { self?.onCommand?(command, item) }
             }
         }

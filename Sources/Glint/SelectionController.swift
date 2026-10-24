@@ -174,7 +174,8 @@ final class SelectionController {
                 let point = NSEvent.mouseLocation
                 lastPointer = point
                 focusOverlay()
-                showToolbar()
+                // plain shortcuts capture on release, only the all-in-one bar has choices to make
+                if allInOne { showToolbar() }
                 move(to: point, modifiers: [])
                 loadSnapshots()
             }
