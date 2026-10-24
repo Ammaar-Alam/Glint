@@ -46,6 +46,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var recordingHiddenWindows: [NSWindow] = []
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        // one Glint at a time, a second copy hands over to the one already running before it registers anything
+        let me = NSRunningApplication.current
+        if let running = NSRunningApplication.runningApplications(withBundleIdentifier: Bundle.main.bundleIdentifier ?? "")
+            .first(where: { $0.processIdentifier != me.processIdentifier && !$0.isTerminated }) {
+            if let url = running.bundleURL { NSWorkspace.shared.openApplication(at: url, configuration: NSWorkspace.OpenConfiguration()) }
+            NSApp.terminate(nil)
+            return
+        }
         NSApp.appearance = NSAppearance(named: .aqua)
         let launchEvent = NSAppleEventManager.shared().currentAppleEvent
         let launchReason = launchEvent?.paramDescriptor(forKeyword: keyAEPropData)?.enumCodeValue
