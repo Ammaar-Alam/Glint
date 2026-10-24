@@ -2,37 +2,41 @@ import AppKit
 import AVFoundation
 import SwiftUI
 
-// what goes into a recording as one row of small switches, each named on hover
+// what goes into a recording as one row of small named switches
 struct RecordingBarControls: View {
     @Binding var options: RecordingOptions
 
     var body: some View {
         HStack(spacing: 2) {
-            toggle("System Audio", on: "speaker.wave.2.fill", off: "speaker.slash", isOn: $options.capturesSystemAudio)
-            toggle("Microphone", on: "mic.fill", off: "mic.slash", isOn: $options.capturesMicrophone)
+            toggle("Audio", help: "Record system audio", on: "speaker.wave.2.fill", off: "speaker.slash", isOn: $options.capturesSystemAudio)
+            toggle("Mic", help: "Record the microphone, right-click to choose one", on: "mic.fill", off: "mic.slash", isOn: $options.capturesMicrophone)
                 .contextMenu { devices(Self.microphones, selection: \.microphoneDeviceID, enabled: \.capturesMicrophone) }
-            toggle("Camera", on: "video.fill", off: "video.slash", isOn: $options.capturesCamera)
+            toggle("Camera", help: "Show your camera, right-click to choose one", on: "video.fill", off: "video.slash", isOn: $options.capturesCamera)
                 .contextMenu { devices(Self.cameras, selection: \.cameraDeviceID, enabled: \.capturesCamera) }
             BarDivider()
-            toggle("Cursor", on: "cursorarrow", off: "cursorarrow.slash", isOn: $options.showsCursor)
-            toggle("Highlight Clicks", on: "cursorarrow.click.2", off: "cursorarrow.click", isOn: $options.showsClicks)
-            toggle("Keystrokes", on: "keyboard.fill", off: "keyboard", isOn: $options.showsKeystrokes)
+            toggle("Cursor", help: "Show the pointer", on: "cursorarrow", off: "cursorarrow.slash", isOn: $options.showsCursor)
+            toggle("Clicks", help: "Highlight clicks", on: "cursorarrow.click.2", off: "cursorarrow.click", isOn: $options.showsClicks)
+            toggle("Keys", help: "Show keys you press, right-click for shortcuts only", on: "keyboard.fill", off: "keyboard", isOn: $options.showsKeystrokes)
                 .contextMenu { Toggle("Only Shortcuts", isOn: $options.keystrokesOnlyShortcuts) }
-            BarDivider()
-            toggle("Hide Desktop Icons", on: "eye.slash", off: "eye", isOn: $options.hideDesktop)
+            toggle("Hide Icons", help: "Hide desktop icons while recording", on: "eye.slash", off: "eye.slash", isOn: $options.hideDesktop)
         }
     }
 
-    private func toggle(_ title: String, on: String, off: String, isOn: Binding<Bool>) -> some View {
+    private func toggle(_ title: String, help: String, on: String, off: String, isOn: Binding<Bool>) -> some View {
         Button { isOn.wrappedValue.toggle() } label: {
-            Image(systemName: isOn.wrappedValue ? on : off)
-                .font(.system(size: 13, weight: .medium))
-                .foregroundStyle(isOn.wrappedValue ? Color.glint : Color.secondary)
-                .contentTransition(.symbolEffect(.replace))
+            VStack(spacing: 3) {
+                Image(systemName: isOn.wrappedValue ? on : off)
+                    .font(.system(size: 13, weight: .medium))
+                    .contentTransition(.symbolEffect(.replace))
+                    .frame(height: 16)
+                Text(title).font(.system(size: 10, weight: .medium)).lineLimit(1).minimumScaleFactor(0.85)
+            }
+            .foregroundStyle(isOn.wrappedValue ? Color.glint : Color.secondary)
+            .frame(maxWidth: .infinity)
         }
-        .buttonStyle(ToolButtonStyle(selected: isOn.wrappedValue, size: CGSize(width: 32, height: 28)))
-        .help(title)
-        .accessibilityLabel(title)
+        .buttonStyle(ToolButtonStyle(selected: isOn.wrappedValue, size: CGSize(width: 0, height: 40)))
+        .help(help)
+        .accessibilityLabel(help)
         .accessibilityValue(isOn.wrappedValue ? "On" : "Off")
     }
 

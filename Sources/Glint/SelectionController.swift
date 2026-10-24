@@ -800,13 +800,9 @@ struct CaptureBar: View {
             HStack(spacing: 2) { ForEach(modes) { modeTile($0) } }
             Divider().padding(.vertical, 10)
             if model.recording {
-                HStack(spacing: 2) {
-                    RecordingBarControls(options: $model.options)
-                    Spacer(minLength: 8)
-                    FlatPicker(selection: $model.options.countdown, options: Self.countdowns, symbol: "timer", quiet: true).help("Countdown")
-                }
-                .padding(.bottom, 6)
-                .transition(.opacity)
+                RecordingBarControls(options: $model.options)
+                    .padding(.bottom, 8)
+                    .transition(.opacity)
             }
             footer
         }
@@ -862,6 +858,7 @@ struct CaptureBar: View {
                 FlatPicker(selection: $model.options.format, options: [("Video", RecordingFormat.video), ("GIF", .gif)], quiet: true)
                 FlatPicker(selection: $model.options.framesPerSecond, options: [("24 fps", 24), ("30 fps", 30), ("60 fps", 60)], quiet: true)
                 FlatPicker(selection: $model.options.maximumDimension, options: [("1080p", 1920), ("1440p", 2560), ("4K", 3840)], quiet: true)
+                FlatPicker(selection: $model.options.countdown, options: Self.countdowns, symbol: "timer", quiet: true).help("Countdown before recording starts")
             } else if model.timerApplies {
                 FlatPicker(selection: $delay, options: Self.timers, symbol: "timer", quiet: true).help("Timer")
             }
@@ -874,7 +871,7 @@ struct CaptureBar: View {
     }
 
     private static let timers: [(String, Int)] = [("No Timer", 0), ("3 Seconds", 3), ("5 Seconds", 5), ("10 Seconds", 10)]
-    private static let countdowns: [(String, Int)] = [("No Countdown", 0), ("3 Seconds", 3), ("5 Seconds", 5), ("10 Seconds", 10)]
+    private static let countdowns: [(String, Int)] = [("Off", 0), ("3s", 3), ("5s", 5), ("10s", 10)]
 
     private func kind(_ title: String, selected: Bool, action: @escaping () -> Void) -> some View {
         Button(action: action) { Text(title).font(.system(size: 12, weight: .semibold)).padding(.horizontal, 12) }
