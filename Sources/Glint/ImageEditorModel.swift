@@ -19,7 +19,9 @@ final class ImageEditorModel: ObservableObject {
     @Published private(set) var document: ImageDocument?
     @Published private(set) var preview: CGImage?
     @Published var selectedIDs: Set<UUID> = []
-    @Published var tool: AnnotationTool = .arrow
+    @Published var tool: AnnotationTool = .arrow { didSet { toolChanged(from: oldValue) } }
+    // crop edits a draft over the whole image and applies it when the crop tool is left
+    @Published private(set) var cropDraft: CGRect?
     @Published var color = EditorDefaults.color
     @Published var lineWidth = EditorDefaults.lineWidth
     @Published var fontSize: Double = 28
@@ -30,7 +32,7 @@ final class ImageEditorModel: ObservableObject {
     @Published var status = "Opening image…"
     @Published var errorMessage: String?
     @Published var zoomLabel = "Fit"
-    @Published var cropAspectRatio = 0.0
+    @Published var cropAspectRatio = 0.0 { didSet { fitCropDraftToRatio() } }
     @Published var smartHighlight = true
     @Published var canCapture = false
     @Published var canPin = false
@@ -126,6 +128,56 @@ final class ImageEditorModel: ObservableObject {
         selectedAnnotations.map(\.bounds).reduce(nil as CGRect?) { $0?.union($1) ?? $1 }
     }
 
+    // what the canvas shows, the whole uncropped image without a background while cropping
+    var displayDocument: ImageDocument? {
+        guard var document, cropDraft != nil else { return document }
+        document.cropRect = Self.cropBounds(document)
+        document.background.enabled = false
+        return document
+    }
+
+    static func cropBounds(_ document: ImageDocument) -> CGRect {
+        CGRect(origin: .zero, size: document.sourceSize).union(document.cropRect)
+    }
+
+    private func toolChanged(from previous: AnnotationTool) {
+        guard previous != tool else { return }
+        if tool == .crop, let document {
+            selectedIDs = []
+            cropDraft = document.cropRect
+            fitCropDraftToRatio()
+            refreshPreview()
+            canvas?.updateCanvasSize()
+        } else if previous == .crop {
+            applyCrop()
+        }
+    }
+
+    func setCropDraft(_ rect: CGRect) { cropDraft = rect }
+
+    private func applyCrop() {
+        guard let draft = cropDraft else { return }
+        cropDraft = nil
+        if draft.integral != document?.cropRect { mutate("Crop") { $0.cropRect = draft.integral } }
+        refreshPreview()
+        canvas?.updateCanvasSize()
+    }
+
+    func cancelCrop() {
+        cropDraft = nil
+        tool = .select
+        refreshPreview()
+        canvas?.updateCanvasSize()
+    }
+
+    private func fitCropDraftToRatio() {
+        guard let draft = cropDraft, let document, cropAspectRatio > 0 else { return }
+        let ratio = document.quarterTurns % 2 == 0 ? cropAspectRatio : 1 / cropAspectRatio
+        var size = draft.size
+        if size.width / size.height > ratio { size.width = size.height * ratio } else { size.height = size.width / ratio }
+        cropDraft = CGRect(x: draft.midX - size.width / 2, y: draft.midY - size.height / 2, width: size.width, height: size.height)
+    }
+
     func snapshot() throws -> ImageProjectContents {
         guard let document, let source else { throw GlintError.message("The image is still opening.") }
         return ImageProjectContents(document: document, source: source, insertedImages: insertedImages)
@@ -197,7 +249,8 @@ final class ImageEditorModel: ObservableObject {
     }
 
     private func renderLatestPreview() {
-        guard !isClosed, let contents = try? snapshot() else { return }
+        guard !isClosed, let saved = try? snapshot(), let shown = displayDocument else { return }
+        let contents = ImageProjectContents(document: shown, source: saved.source, insertedImages: saved.insertedImages)
         let revision = renderRevision
         let maximumDimension: CGFloat? = (canvas?.magnification ?? 0) >= 0.9 ? nil : 2200
         // keep one render in flight and pick up the newest gesture state when it finishes
@@ -209,7 +262,7 @@ final class ImageEditorModel: ObservableObject {
                 self.renderTask = nil
                 switch result {
                 case .success(let image):
-                    if self.document?.canvasSize == contents.document.canvasSize {
+                    if self.displayDocument?.canvasSize == contents.document.canvasSize {
                         self.preview = image
                         self.canvas?.updateCanvasSize()
                     }
@@ -311,7 +364,10 @@ final class ImageEditorModel: ObservableObject {
         canvas?.fitToWindow()
     }
 
-    func resetCrop() { mutate("Reset Crop") { $0.cropRect = CGRect(origin: .zero, size: $0.sourceSize) } }
+    func resetCrop() {
+        if let document, cropDraft != nil { cropDraft = CGRect(origin: .zero, size: document.sourceSize); return }
+        mutate("Reset Crop") { $0.cropRect = CGRect(origin: .zero, size: $0.sourceSize) }
+    }
 
     func addImage(url: URL, at point: CGPoint? = nil, beside: Bool = false, ownsTemporary: Bool = false) {
         Task {
