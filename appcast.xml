@@ -3,6 +3,15 @@
   <channel>
     <title>Glint</title>
     <item>
+      <title>0.3.1</title>
+      <pubDate>Sat, 24 Oct 2026 04:16:11 +0000</pubDate>
+      <sparkle:version>4</sparkle:version>
+      <sparkle:shortVersionString>0.3.1</sparkle:shortVersionString>
+      <sparkle:minimumSystemVersion>26.0</sparkle:minimumSystemVersion>
+      <link>https://github.com/Ammaar-Alam/Glint/releases/tag/0.3.1</link>
+      <enclosure url="https://github.com/Ammaar-Alam/Glint/releases/download/0.3.1/Glint-0.3.1.dmg" type="application/octet-stream" sparkle:edSignature="v7VijdGl+ohzMe5b0UldD/72GIXYr2isB10XnxmhyRhgdznb4Y8oDNaYYASN67lFuK/OXDZNMMcIOCph4fRdAw==" length="4050381"/>
+    </item>
+    <item>
       <title>0.3.0</title>
       <pubDate>Sat, 24 Oct 2026 03:40:11 +0000</pubDate>
       <sparkle:version>3</sparkle:version>
