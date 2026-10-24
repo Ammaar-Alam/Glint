@@ -2,7 +2,7 @@ import AppKit
 import AVFoundation
 import SwiftUI
 
-// the recording half of the capture bar
+// the recording half of the capture bar, just the format and the two inputs people switch most
 struct RecordingBarControls: View {
     @Binding var options: RecordingOptions
 
@@ -12,17 +12,8 @@ struct RecordingBarControls: View {
                 format(.video, "Video")
                 format(.gif, "GIF")
             }
-            BarDivider()
-            toggle($options.capturesSystemAudio, on: "speaker.wave.2.fill", off: "speaker.slash", help: "System audio")
             toggle($options.capturesMicrophone, on: "mic.fill", off: "mic.slash", help: "Microphone")
-            devices(Self.microphones, selection: $options.microphoneDeviceID, enabled: $options.capturesMicrophone, help: "Choose microphone")
             toggle($options.capturesCamera, on: "video.fill", off: "video.slash", help: "Camera")
-            devices(Self.cameras, selection: $options.cameraDeviceID, enabled: $options.capturesCamera, help: "Choose camera")
-            BarDivider()
-            toggle($options.showsCursor, on: "cursorarrow", off: "cursorarrow.slash", help: "Cursor")
-            toggle($options.showsClicks, on: "cursorarrow.click.2", off: "cursorarrow.click", help: "Clicks")
-            toggle($options.showsKeystrokes, on: "keyboard.fill", off: "keyboard", help: "Keystrokes. Every key you type is saved with the recording")
-            MenuButton(help: "Options", items: menu) { Image(systemName: "slider.horizontal.3") }
         }
     }
 
@@ -36,6 +27,7 @@ struct RecordingBarControls: View {
         Button { isOn.wrappedValue.toggle() } label: {
             Image(systemName: isOn.wrappedValue ? on : off)
                 .foregroundStyle(isOn.wrappedValue ? Color.primary : Color.secondary)
+                .contentTransition(.symbolEffect(.replace))
         }
         .buttonStyle(ToolButtonStyle(selected: isOn.wrappedValue, tint: .primary))
         .help(help)
@@ -43,42 +35,41 @@ struct RecordingBarControls: View {
         .accessibilityValue(isOn.wrappedValue ? "On" : "Off")
     }
 
-    private func devices(_ list: [AVCaptureDevice], selection: Binding<String?>, enabled: Binding<Bool>, help: String) -> some View {
-        MenuButton(help: help, width: 14, items: {
-            ([nil] + list.map(Optional.some)).map { device in
-                let item = HandlerMenuItem(device?.localizedName ?? "System Default") {
-                    selection.wrappedValue = device?.uniqueID
-                    enabled.wrappedValue = true
-                }
-                item.state = selection.wrappedValue == device?.uniqueID ? .on : .off
-                return item
-            }
-        }) {
-            Image(systemName: "chevron.down").font(.system(size: 8, weight: .bold)).foregroundStyle(.secondary)
+    // everything else about a recording, for the bar's options menu
+    static func menu(_ options: Binding<RecordingOptions>) -> [NSMenuItem] {
+        func check(_ title: String, _ value: WritableKeyPath<RecordingOptions, Bool>, enabled: Bool = true) -> NSMenuItem {
+            let item = HandlerMenuItem(title) { options.wrappedValue[keyPath: value].toggle() }
+            item.state = options.wrappedValue[keyPath: value] ? .on : .off
+            item.isEnabled = enabled
+            return item
         }
-        .padding(.leading, -2)
-    }
-
-    private func menu() -> [NSMenuItem] {
-        func submenu(_ title: String, _ choices: [(String, Int)], _ value: WritableKeyPath<RecordingOptions, Int>) -> NSMenuItem {
+        func devices(_ title: String, _ list: [AVCaptureDevice], _ selection: WritableKeyPath<RecordingOptions, String?>, _ enabled: WritableKeyPath<RecordingOptions, Bool>) -> NSMenuItem {
             let item = NSMenuItem(title: title, action: nil, keyEquivalent: "")
             let menu = NSMenu()
-            for (name, number) in choices {
-                let choice = HandlerMenuItem(name) { options[keyPath: value] = number }
-                choice.state = options[keyPath: value] == number ? .on : .off
+            for device in [nil] + list.map(Optional.some) {
+                let choice = HandlerMenuItem(device?.localizedName ?? "System Default") {
+                    options.wrappedValue[keyPath: selection] = device?.uniqueID
+                    options.wrappedValue[keyPath: enabled] = true
+                }
+                choice.state = options.wrappedValue[keyPath: selection] == device?.uniqueID ? .on : .off
                 menu.addItem(choice)
             }
             item.submenu = menu
             return item
         }
-        let desktop = HandlerMenuItem("Hide Desktop Icons") { options.hideDesktop.toggle() }
-        desktop.state = options.hideDesktop ? .on : .off
-        let shortcuts = HandlerMenuItem("Only Show Shortcuts") { options.keystrokesOnlyShortcuts.toggle() }
-        shortcuts.state = options.keystrokesOnlyShortcuts ? .on : .off
-        shortcuts.isEnabled = options.showsKeystrokes
-        return [submenu("Frame Rate", [("24 fps", 24), ("30 fps", 30), ("60 fps", 60)], \.framesPerSecond),
-                submenu("Resolution", [("1080p", 1920), ("1440p", 2560), ("4K", 3840)], \.maximumDimension),
-                .separator(), desktop, shortcuts]
+        let value = options.wrappedValue
+        return [check("System Audio", \.capturesSystemAudio),
+                devices("Microphone", microphones, \.microphoneDeviceID, \.capturesMicrophone),
+                devices("Camera", cameras, \.cameraDeviceID, \.capturesCamera),
+                .separator(),
+                check("Show Cursor", \.showsCursor),
+                check("Highlight Clicks", \.showsClicks),
+                check("Show Keystrokes", \.showsKeystrokes),
+                check("Only Shortcuts", \.keystrokesOnlyShortcuts, enabled: value.showsKeystrokes),
+                .separator(),
+                CaptureBar.submenu("Frame Rate", [("24 fps", 24), ("30 fps", 30), ("60 fps", 60)], selected: value.framesPerSecond) { options.wrappedValue.framesPerSecond = $0 },
+                CaptureBar.submenu("Resolution", [("1080p", 1920), ("1440p", 2560), ("4K", 3840)], selected: value.maximumDimension) { options.wrappedValue.maximumDimension = $0 },
+                check("Hide Desktop Icons", \.hideDesktop)]
     }
 
     private static var microphones: [AVCaptureDevice] {
@@ -140,9 +131,10 @@ struct RecordingControls: View {
         }
         .padding(.horizontal, 6)
         .frame(height: 40)
-        .background(.regularMaterial, in: Capsule())
-        .overlay(Capsule().strokeBorder(Color.primary.opacity(0.1)))
-        .shadow(color: .black.opacity(0.18), radius: 10, y: 3)
+        .background(Color.white, in: Capsule())
+        .overlay(Capsule().strokeBorder(Color.black.opacity(0.08)))
+        .shadow(color: .black.opacity(0.2), radius: 12, y: 3)
+        .animation(.snappy(duration: 0.22), value: recorder.state)
         .fixedSize()
         .padding(16)
         .onAppear { pulse = !reduceMotion }
@@ -193,3 +185,47 @@ struct RecordingControls: View {
             .accessibilityLabel(help)
     }
 }
+
+// a thin outline marks what is being recorded, the countdown plays in the middle of it
+struct RecordingFrame: View {
+    let recorder: any RecordingStatus
+    // in the panel's top-left coordinates, nil for the whole display
+    let area: CGRect?
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    var body: some View {
+        GeometryReader { proxy in
+            let hole = area ?? CGRect(origin: .zero, size: proxy.size)
+            let counting = recorder.countdownRemaining > 0
+            ZStack {
+                // the outside dims only while counting down, then gets out of the way
+                Path { path in
+                    path.addRect(CGRect(origin: .zero, size: proxy.size))
+                    path.addRect(hole)
+                }
+                .fill(Color.black.opacity(counting && area != nil ? 0.3 : 0), style: FillStyle(eoFill: true))
+                if area != nil {
+                    Rectangle()
+                        .strokeBorder(Color.white, lineWidth: 1.5)
+                        .shadow(color: .black.opacity(0.35), radius: 2)
+                        .frame(width: hole.width + 3, height: hole.height + 3)
+                        .position(x: hole.midX, y: hole.midY)
+                }
+                if counting {
+                    Text("\(recorder.countdownRemaining)")
+                        .font(.system(size: 96, weight: .semibold, design: .rounded).monospacedDigit())
+                        .foregroundStyle(.white)
+                        .frame(width: 168, height: 168)
+                        .background(Circle().fill(Color.black.opacity(0.45)))
+                        .id(recorder.countdownRemaining)
+                        .transition(reduceMotion ? .opacity : .scale(scale: 1.25).combined(with: .opacity))
+                        .position(x: hole.midX, y: hole.midY)
+                        .accessibilityLabel("Recording starts in \(recorder.countdownRemaining)")
+                }
+            }
+            .animation(.easeOut(duration: 0.3), value: recorder.countdownRemaining)
+        }
+        .ignoresSafeArea()
+    }
+}
+
