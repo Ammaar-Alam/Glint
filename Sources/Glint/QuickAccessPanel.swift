@@ -131,7 +131,7 @@ final class QuickAccessPanel: NSPanel {
         if !shelf.ids.isEmpty { show(); startDismissTimer() }
     }
 
-    static let baseCardSize = CGSize(width: 212, height: 134)
+    static let baseCardSize = CGSize(width: 192, height: 122)
     nonisolated static var cardScale: CGFloat {
         let value = UserDefaults.standard.double(forKey: "shelfScale")
         return value > 0 ? min(1.5, max(0.75, value)) : 1
@@ -179,9 +179,9 @@ final class QuickAccessPanel: NSPanel {
             y -= Self.gap
         }
         contentView = container
-        // cards sit about 24pt in from the screen edges
-        let x = right ? visible.maxX - width - 10 : visible.minX + 10
-        let originY = bottom ? visible.minY + 10 : visible.maxY - min(height, visible.height) - 10
+        // cards sit well inside the screen corner, clear of the dock and the edge
+        let x = right ? visible.maxX - width - 16 : visible.minX + 16
+        let originY = bottom ? visible.minY + 40 : visible.maxY - min(height, visible.height) - 16
         setFrame(CGRect(x: x, y: originY, width: width, height: min(height, visible.height)), display: true)
     }
 
@@ -318,7 +318,10 @@ final class QuickAccessCard: NSView {
         thumbnail.frame = bounds
         overlay.frame = bounds
         overlay.wantsLayer = true
-        overlay.layer?.backgroundColor = NSColor.black.withAlphaComponent(0.4).cgColor
+        // hovering frosts the capture behind the buttons
+        overlay.layerUsesCoreImageFilters = true
+        overlay.layer?.backgroundFilters = [CIFilter(name: "CIGaussianBlur", parameters: [kCIInputRadiusKey: 7])].compactMap { $0 }
+        overlay.layer?.backgroundColor = NSColor.black.withAlphaComponent(0.22).cgColor
         overlay.alphaValue = 0
         clip.addSubview(thumbnail)
         clip.addSubview(overlay)

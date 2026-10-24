@@ -127,8 +127,8 @@ final class SettingsTests: XCTestCase {
         XCTAssertEqual(QuickAccessPanel.cardsThatFit(height: 1000, footer: true, scale: 1.5), 4)
         XCTAssertEqual(QuickAccessPanel.cardsThatFit(height: 600, footer: true, scale: 1.5), 2)
         XCTAssertEqual(QuickAccessPanel.cardsThatFit(height: 600, footer: true, scale: 0.75), 4)
-        // 14 * 2 inset, two 201 point cards and the footer stay inside 600 points
-        XCTAssertLessThanOrEqual(14 * 2 + 2 * 201 + 10 + 24 + 10, 600)
+        // 14 * 2 inset, two 183 point cards and the footer stay inside 600 points
+        XCTAssertLessThanOrEqual(14 * 2 + 2 * 183 + 10 + 24 + 10, 600)
     }
 
     func testFolderDestinationsAreReservedUntilWritten() throws {
