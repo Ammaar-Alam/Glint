@@ -742,6 +742,7 @@ final class DragSourceView: NSView, NSDraggingSource {
     private var downEvent: NSEvent?
     private var file: URL?
     private var dragging = false
+    private var moved = false
 
     init(flatten: @escaping () async -> URL?) {
         self.flatten = flatten
@@ -753,14 +754,25 @@ final class DragSourceView: NSView, NSDraggingSource {
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
     override func resetCursorRects() { addCursorRect(bounds, cursor: .openHand) }
 
-    // the current edits render on press, the drag starts once the file exists
+    // the current edits render on press, the drag starts once the file exists and the pointer has moved
     override func mouseDown(with event: NSEvent) {
         downEvent = event
         file = nil
-        Task { file = await flatten() }
+        moved = false
+        Task {
+            let url = await flatten()
+            guard downEvent === event else { return }
+            file = url
+            if moved { startDrag() }
+        }
     }
 
     override func mouseDragged(with event: NSEvent) {
+        moved = true
+        startDrag()
+    }
+
+    private func startDrag() {
         guard !dragging, let file, let downEvent else { return }
         dragging = true
         let item = NSDraggingItem(pasteboardWriter: file as NSURL)

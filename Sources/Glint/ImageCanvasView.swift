@@ -208,6 +208,8 @@ final class ImageCanvasView: NSView {
             let y = min(max(start.minY + dy, bounds.minY), bounds.maxY - start.height)
             return CGRect(origin: CGPoint(x: x, y: y), size: start.size)
         }
+        let chosen = square ? 1 : model.cropAspectRatio
+        let ratio = chosen > 0 ? (model.document?.quarterTurns ?? 0) % 2 == 0 ? chosen : 1 / chosen : nil
         var minX = start.minX, maxX = start.maxX, minY = start.minY, maxY = start.maxY
         switch handle {
         case 0: minX += dx; minY += dy
@@ -218,19 +220,30 @@ final class ImageCanvasView: NSView {
         case 5: maxX += dx
         case 6: maxY += dy
         case 7: minX += dx
-        default: return rectBetween(startPoint, currentPoint).intersection(bounds)
+        default:
+            // a new frame grows away from where the drag began
+            return Self.fitCrop(rectBetween(startPoint, currentPoint), anchor: CGPoint(x: currentPoint.x < startPoint.x ? 1 : 0, y: currentPoint.y < startPoint.y ? 1 : 0),
+                           ratio: ratio, widthLeads: true, bounds: bounds)
         }
-        var rect = CGRect(x: min(minX, maxX), y: min(minY, maxY), width: max(8, abs(maxX - minX)), height: max(8, abs(maxY - minY)))
-        let chosen = square ? 1 : model.cropAspectRatio
-        if chosen > 0, let document = model.document {
-            let ratio = document.quarterTurns % 2 == 0 ? chosen : 1 / chosen
-            if [4, 6].contains(handle) { rect.size.width = rect.height * ratio; rect.origin.x = start.midX - rect.width / 2 }
-            else {
-                rect.size.height = rect.width / ratio
-                if [0, 1].contains(handle) { rect.origin.y = start.maxY - rect.height }
-            }
-        }
-        return rect.intersection(bounds)
+        let rect = CGRect(x: min(minX, maxX), y: min(minY, maxY), width: max(8, abs(maxX - minX)), height: max(8, abs(maxY - minY)))
+        // the side opposite the dragged handle stays put, edges keep the other axis centered
+        let fx: CGFloat = [0, 3, 7].contains(handle) ? (minX < maxX ? 1 : 0) : [1, 2, 5].contains(handle) ? (maxX > minX ? 0 : 1) : 0.5
+        let fy: CGFloat = [0, 1, 4].contains(handle) ? (minY < maxY ? 1 : 0) : [2, 3, 6].contains(handle) ? (maxY > minY ? 0 : 1) : 0.5
+        return Self.fitCrop(rect, anchor: CGPoint(x: fx, y: fy), ratio: ratio, widthLeads: ![4, 6].contains(handle), bounds: bounds)
+    }
+
+    // applies the ratio around a fixed point, then shrinks both sides together until it fits the image
+    static func fitCrop(_ rect: CGRect, anchor: CGPoint, ratio: Double?, widthLeads: Bool, bounds: CGRect) -> CGRect {
+        let point = CGPoint(x: rect.minX + anchor.x * rect.width, y: rect.minY + anchor.y * rect.height)
+        var size = rect.size
+        if let ratio { if widthLeads { size.height = size.width / ratio } else { size.width = size.height * ratio } }
+        var scale: CGFloat = 1
+        if anchor.x > 0 { scale = min(scale, (point.x - bounds.minX) / (anchor.x * size.width)) }
+        if anchor.x < 1 { scale = min(scale, (bounds.maxX - point.x) / ((1 - anchor.x) * size.width)) }
+        if anchor.y > 0 { scale = min(scale, (point.y - bounds.minY) / (anchor.y * size.height)) }
+        if anchor.y < 1 { scale = min(scale, (bounds.maxY - point.y) / ((1 - anchor.y) * size.height)) }
+        size = CGSize(width: size.width * max(0, scale), height: size.height * max(0, scale))
+        return CGRect(x: point.x - anchor.x * size.width, y: point.y - anchor.y * size.height, width: size.width, height: size.height).intersection(bounds)
     }
 
     // the dimmed outside, a thin frame with thirds and bold handles
@@ -506,7 +519,11 @@ final class ImageCanvasView: NSView {
         window?.makeFirstResponder(self)
     }
 
-    func commitEditing() { finishText(cancelled: false) }
+    func commitEditing() {
+        finishText(cancelled: false)
+        // a pending crop counts once the image leaves the editor
+        if model.tool == .crop { model.tool = .select }
+    }
 
     override func keyDown(with event: NSEvent) {
         let command = event.modifierFlags.contains(.command)
