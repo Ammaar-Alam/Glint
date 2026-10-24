@@ -92,6 +92,7 @@ final class SelectionController {
     private var snapshots: (() async -> [FrozenDisplayFrame])?
     private var snapshotTask: Task<Void, Never>?
     private var toolbarSize = CGSize.zero
+    private var toolbarVisible = false
     private var moveObserver: NSObjectProtocol?
     // where the bar was dragged to, as a share of the screen so it holds across displays
     private static let placementKey = "captureBarPlacement"
@@ -346,16 +347,25 @@ final class SelectionController {
             origin = CGPoint(x: frame.midX - toolbarSize.width / 2, y: frame.midY - toolbarSize.height / 2)
         }
         let target = CGRect(origin: CGPoint(x: origin.x.rounded(), y: origin.y.rounded()), size: toolbarSize)
+        // each change animates once, pointer moves in between leave a running fade alone
         if hidden {
-            if toolbar.alphaValue > 0 { toolbar.animator().alphaValue = 0 }
+            guard toolbarVisible else { return }
+            toolbarVisible = false
+            NSAnimationContext.runAnimationGroup { context in
+                context.duration = 0.1
+                toolbar.animator().alphaValue = 0
+            }
             return
         }
-        guard toolbar.frame != target || toolbar.alphaValue < 1 else { return }
-        if toolbar.alphaValue < 1 { toolbar.setFrame(target, display: true) }
+        let appearing = !toolbarVisible
+        guard appearing || toolbar.frame != target else { return }
+        toolbarVisible = true
+        // an invisible bar jumps straight to its spot and only fades
+        if appearing { toolbar.setFrame(target, display: true) }
         NSAnimationContext.runAnimationGroup { context in
-            context.duration = toolbar.alphaValue < 1 ? 0.14 : 0.2
+            context.duration = appearing ? 0.16 : 0.2
             context.timingFunction = CAMediaTimingFunction(controlPoints: 0.2, 0.9, 0.3, 1)
-            if toolbar.alphaValue >= 1 { toolbar.animator().setFrame(target, display: true) }
+            if !appearing { toolbar.animator().setFrame(target, display: true) }
             toolbar.animator().alphaValue = 1
         }
     }
@@ -783,28 +793,36 @@ struct CaptureBar: View {
 
     private var modes: [CaptureMode] { model.recording ? [.area, .fullScreen, .window] : [.area, .fullScreen, .window, .scrolling, .text] }
 
-    // what to capture, how, then go, with every choice in plain view
+    // pick what, then go; settings read as quiet values beside the one action
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             header
-            HStack(spacing: 4) { ForEach(modes) { modeTile($0) } }
-            Divider().padding(.vertical, 12)
+            HStack(spacing: 2) { ForEach(modes) { modeTile($0) } }
+            Divider().padding(.vertical, 10)
             if model.recording {
-                RecordingBarControls(options: $model.options)
-                    .padding(.bottom, 12)
-                    .transition(.opacity)
+                HStack(spacing: 2) {
+                    RecordingBarControls(options: $model.options)
+                    Spacer(minLength: 8)
+                    FlatPicker(selection: $model.options.countdown, options: Self.countdowns, symbol: "timer", quiet: true).help("Countdown")
+                }
+                .padding(.bottom, 6)
+                .transition(.opacity)
             }
             footer
         }
-        .padding(14)
-        .frame(width: 470)
-        .background(Color.white, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
-        .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous).strokeBorder(Color.black.opacity(0.08)))
-        .shadow(color: .black.opacity(0.18), radius: 18, y: 6)
+        .padding(12)
+        .frame(width: 420)
+        // the shadow belongs to the card alone, on the whole view it haloes every label
+        .background {
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .fill(Color.white)
+                .shadow(color: .black.opacity(0.16), radius: 16, y: 5)
+        }
+        .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).strokeBorder(Color.black.opacity(0.08)))
         .fixedSize()
         .padding(20)
-        .animation(.snappy(duration: 0.22), value: model.recording)
-        .animation(.snappy(duration: 0.18), value: model.mode)
+        .animation(.snappy(duration: 0.2), value: model.recording)
+        .animation(.snappy(duration: 0.16), value: model.mode)
         .onGeometryChange(for: CGSize.self) { $0.size } action: { model.onResize($0) }
     }
 
@@ -812,37 +830,40 @@ struct CaptureBar: View {
         HStack(spacing: 8) {
             if model.allowsRecording {
                 Segmented {
-                    kind("Screenshot", symbol: "camera", selected: !model.recording) { model.onRecording(false) }
-                    kind("Record", symbol: "record.circle", selected: model.recording) { model.onRecording(true) }
+                    kind("Screenshot", selected: !model.recording) { model.onRecording(false) }
+                    kind("Record", selected: model.recording) { model.onRecording(true) }
                 }
             }
             Spacer(minLength: 8)
-            tool("xmark", help: "Close", action: model.onCancel)
+            Button(action: model.onCancel) { Image(systemName: "xmark").font(.system(size: 11, weight: .semibold)) }
+                .buttonStyle(ToolButtonStyle(size: CGSize(width: 24, height: 24)))
+                .help("Close")
+                .accessibilityLabel("Close")
         }
-        .padding(.bottom, 12)
+        .padding(.bottom, 10)
     }
 
     private func modeTile(_ mode: CaptureMode) -> some View {
         Button { model.onMode(mode) } label: {
-            VStack(spacing: 6) {
-                Image(systemName: mode.symbol).font(.system(size: 17, weight: .medium))
+            VStack(spacing: 5) {
+                Image(systemName: mode.symbol).font(.system(size: 15, weight: .medium)).frame(height: 18)
                 Text(name(mode)).font(.system(size: 11, weight: .medium))
             }
             .frame(maxWidth: .infinity)
         }
-        .buttonStyle(ToolButtonStyle(selected: model.mode == mode, size: CGSize(width: 0, height: 58)))
+        .buttonStyle(ToolButtonStyle(selected: model.mode == mode, size: CGSize(width: 0, height: 50)))
         .help(name(mode))
         .accessibilityAddTraits(model.mode == mode ? .isSelected : [])
     }
 
     private var footer: some View {
-        HStack(spacing: 8) {
+        HStack(spacing: 2) {
             if model.recording {
-                Text("Countdown").font(.system(size: 12, weight: .medium)).foregroundStyle(.secondary)
-                SegmentedChoice(choices: Self.seconds, selection: $model.options.countdown)
+                FlatPicker(selection: $model.options.format, options: [("Video", RecordingFormat.video), ("GIF", .gif)], quiet: true)
+                FlatPicker(selection: $model.options.framesPerSecond, options: [("24 fps", 24), ("30 fps", 30), ("60 fps", 60)], quiet: true)
+                FlatPicker(selection: $model.options.maximumDimension, options: [("1080p", 1920), ("1440p", 2560), ("4K", 3840)], quiet: true)
             } else if model.timerApplies {
-                Text("Timer").font(.system(size: 12, weight: .medium)).foregroundStyle(.secondary)
-                SegmentedChoice(choices: Self.seconds, selection: $delay)
+                FlatPicker(selection: $delay, options: Self.timers, symbol: "timer", quiet: true).help("Timer")
             }
             Spacer(minLength: 8)
             Button(action: model.onCapture) {
@@ -852,15 +873,14 @@ struct CaptureBar: View {
         }
     }
 
-    private static let seconds: [(String, Int)] = [("Off", 0), ("3s", 3), ("5s", 5), ("10s", 10)]
+    private static let timers: [(String, Int)] = [("No Timer", 0), ("3 Seconds", 3), ("5 Seconds", 5), ("10 Seconds", 10)]
+    private static let countdowns: [(String, Int)] = [("No Countdown", 0), ("3 Seconds", 3), ("5 Seconds", 5), ("10 Seconds", 10)]
 
-    private func kind(_ title: String, symbol: String, selected: Bool, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            Label(title, systemImage: symbol).font(.system(size: 12, weight: .semibold)).padding(.horizontal, 10)
-        }
-        .buttonStyle(ToolButtonStyle(selected: selected, size: CGSize(width: 0, height: 26), tint: .primary))
-        .fixedSize()
-        .accessibilityAddTraits(selected ? .isSelected : [])
+    private func kind(_ title: String, selected: Bool, action: @escaping () -> Void) -> some View {
+        Button(action: action) { Text(title).font(.system(size: 12, weight: .semibold)).padding(.horizontal, 12) }
+            .buttonStyle(ToolButtonStyle(selected: selected, size: CGSize(width: 0, height: 24), tint: .primary))
+            .fixedSize()
+            .accessibilityAddTraits(selected ? .isSelected : [])
     }
 
     private func tool(_ symbol: String, help: String, selected: Bool = false, segment: Bool = false, action: @escaping () -> Void) -> some View {
