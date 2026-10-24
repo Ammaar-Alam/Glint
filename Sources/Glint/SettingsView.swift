@@ -245,6 +245,9 @@ private struct GeneralPane: View {
     @AppStorage("filenameTemplate") private var filename = "Glint {date} at {time}"
     @AppStorage("retentionDays") private var retention = 0
     @State private var login = SMAppService.mainApp.status == .enabled
+    // the updater is not observable, so the switches keep their own state and push changes to it
+    @State private var checksForUpdates = Updates.controller.updater.automaticallyChecksForUpdates
+    @State private var installsUpdates = Updates.controller.updater.automaticallyDownloadsUpdates
     @State private var error: String?
 
     private static let desktop = FileManager.default.urls(for: .desktopDirectory, in: .userDomainMask)[0].path
@@ -261,6 +264,10 @@ private struct GeneralPane: View {
                 }
             ToggleRow("Show menu bar icon", caption: showMenuBarIcon ? nil : "Open Glint again to get back here.", isOn: $showMenuBarIcon)
             ToggleRow("Play sounds", isOn: $sound)
+            ToggleRow("Check for updates", isOn: $checksForUpdates)
+                .onChange(of: checksForUpdates) { _, value in Updates.controller.updater.automaticallyChecksForUpdates = value }
+            ToggleRow("Install updates automatically", isOn: $installsUpdates)
+                .onChange(of: installsUpdates) { _, value in Updates.controller.updater.automaticallyDownloadsUpdates = value }
         }
         SettingsGroup(title: "Files") {
             SettingsRow("Save to") {
