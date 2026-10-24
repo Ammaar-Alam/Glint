@@ -186,7 +186,7 @@ struct RecordingControls: View {
     }
 }
 
-// a thin outline marks what is being recorded, the countdown plays in the middle of it
+// the recorded area stays lit with an outline while the rest dims, the countdown plays in the middle of it
 struct RecordingFrame: View {
     let recorder: any RecordingStatus
     // in the panel's top-left coordinates, nil for the whole display
@@ -198,12 +198,12 @@ struct RecordingFrame: View {
             let hole = area ?? CGRect(origin: .zero, size: proxy.size)
             let counting = recorder.countdownRemaining > 0
             ZStack {
-                // the outside dims only while counting down, then gets out of the way
+                // everything outside the recording stays dimmed, a little deeper while counting down
                 Path { path in
                     path.addRect(CGRect(origin: .zero, size: proxy.size))
                     path.addRect(hole)
                 }
-                .fill(Color.black.opacity(counting && area != nil ? 0.3 : 0), style: FillStyle(eoFill: true))
+                .fill(Color.black.opacity(area == nil ? 0 : counting ? 0.4 : 0.25), style: FillStyle(eoFill: true))
                 if area != nil {
                     Rectangle()
                         .strokeBorder(Color.white, lineWidth: 1.5)

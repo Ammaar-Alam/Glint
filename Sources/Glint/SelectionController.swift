@@ -92,6 +92,9 @@ final class SelectionController {
     private var snapshots: (() async -> [FrozenDisplayFrame])?
     private var snapshotTask: Task<Void, Never>?
     private var toolbarSize = CGSize.zero
+    private var moveObserver: NSObjectProtocol?
+    // where the bar was dragged to, as a share of the screen so it holds across displays
+    private static let placementKey = "captureBarPlacement"
     private var showsLoupe = false
     private var toolbar: SelectionPanel?
     private var fixedSize: CGSize?
@@ -297,6 +300,15 @@ final class SelectionController {
         panel.isReleasedWhenClosed = false
         panel.hidesOnDeactivate = false
         panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
+        // drag the bar by its background, it stays wherever it was left
+        panel.isMovableByWindowBackground = true
+        moveObserver = NotificationCenter.default.addObserver(forName: NSWindow.didMoveNotification, object: panel, queue: .main) { [weak panel] _ in
+            MainActor.assumeIsolated {
+                guard let panel, NSApp.currentEvent?.type == .leftMouseDragged, let screen = panel.screen else { return }
+                let bounds = screen.visibleFrame
+                UserDefaults.standard.set([(panel.frame.midX - bounds.minX) / bounds.width, (panel.frame.midY - bounds.minY) / bounds.height], forKey: Self.placementKey)
+            }
+        }
         bar.onMode = { [weak self] in self?.changeMode($0) }
         bar.onRecording = { [weak self] recording in
             guard let self else { return }
@@ -324,11 +336,21 @@ final class SelectionController {
     // the bar rides under the chosen area like a part of it, and steps away while the area is being drawn
     private func layoutToolbar(hidden: Bool) {
         guard let toolbar, toolbarSize.width > 0 else { return }
-        let area = mode == .fullScreen ? nil : selection
+        // a drawn area keeps the bar under it, otherwise it waits in the middle or where it was dragged
+        let area = mode == .area || mode == .scrolling ? selection : nil
         let anchor = area.map { CGPoint(x: $0.midX, y: $0.midY) } ?? lastPointer
         let frame = (NSScreen.screens.first { $0.frame.contains(anchor) } ?? NSScreen.screens[0]).visibleFrame
-        let origin = area.map { CaptureGeometry.attach(toolbarSize, to: $0, within: frame) }
-            ?? CGPoint(x: frame.midX - toolbarSize.width / 2, y: frame.minY + 12)
+        let placed = (UserDefaults.standard.array(forKey: Self.placementKey) as? [Double]).flatMap { $0.count == 2 ? $0 : nil }
+        let origin: CGPoint
+        if let placed {
+            let x = min(max(frame.minX + frame.width * placed[0] - toolbarSize.width / 2, frame.minX), frame.maxX - toolbarSize.width)
+            let y = min(max(frame.minY + frame.height * placed[1] - toolbarSize.height / 2, frame.minY), frame.maxY - toolbarSize.height)
+            origin = CGPoint(x: x, y: y)
+        } else if let area {
+            origin = CaptureGeometry.attach(toolbarSize, to: area, within: frame)
+        } else {
+            origin = CGPoint(x: frame.midX - toolbarSize.width / 2, y: frame.midY - toolbarSize.height / 2)
+        }
         let target = CGRect(origin: CGPoint(x: origin.x.rounded(), y: origin.y.rounded()), size: toolbarSize)
         if hidden {
             if toolbar.alphaValue > 0 { toolbar.animator().alphaValue = 0 }
@@ -482,6 +504,8 @@ final class SelectionController {
         self.continuation = nil
         snapshotTask?.cancel()
         snapshotTask = nil
+        if let moveObserver { NotificationCenter.default.removeObserver(moveObserver) }
+        moveObserver = nil
         toolbar?.orderOut(nil)
         toolbar?.close()
         toolbar = nil
@@ -815,43 +839,65 @@ struct CaptureBar: View {
 
     private var modes: [CaptureMode] { model.recording ? [.area, .fullScreen, .window] : [.area, .fullScreen, .window, .scrolling, .text] }
 
-    // the choices people make every time stay on the bar, everything else sits in one menu
+    // a small panel: what to do, how to frame it, then go; everything rarer sits in one menu
     var body: some View {
-        Island {
-            tool("xmark", help: "Close", action: model.onCancel)
-            if model.allInOne {
-                BarDivider()
+        VStack(spacing: 0) {
+            HStack(spacing: 8) {
                 if model.allowsRecording {
                     Segmented {
-                        tool("camera", help: "Screenshot", selected: !model.recording, segment: true) { model.onRecording(false) }
-                        tool("record.circle", help: "Record", selected: model.recording, segment: true) { model.onRecording(true) }
+                        kind("Screenshot", symbol: "camera", selected: !model.recording) { model.onRecording(false) }
+                        kind("Record", symbol: "record.circle", selected: model.recording) { model.onRecording(true) }
                     }
-                    BarDivider()
                 }
+                Spacer(minLength: 8)
+                MenuButton(help: "Options", items: options) { Image(systemName: "ellipsis") }
+                tool("xmark", help: "Close", action: model.onCancel)
+            }
+            .padding(.bottom, 12)
+            HStack(spacing: 4) {
                 ForEach(modes) { mode in
-                    tool(mode.symbol, help: name(mode), selected: model.mode == mode) { model.onMode(mode) }
+                    Button { model.onMode(mode) } label: {
+                        VStack(spacing: 6) {
+                            Image(systemName: mode.symbol).font(.system(size: 17, weight: .medium))
+                            Text(name(mode)).font(.system(size: 11, weight: .medium))
+                        }
+                        .frame(maxWidth: .infinity)
+                    }
+                    .buttonStyle(ToolButtonStyle(selected: model.mode == mode, size: CGSize(width: 74, height: 58)))
+                    .help(name(mode))
+                    .accessibilityAddTraits(model.mode == mode ? .isSelected : [])
                 }
             }
-            if model.allInOne || model.mode != .window {
-                BarDivider()
-                SelectionSizeFields(model: model)
+            Divider().padding(.vertical, 12)
+            HStack(spacing: 8) {
+                if model.mode != .window { SelectionSizeFields(model: model) }
+                if model.recording { RecordingBarControls(options: $model.options) }
+                Spacer(minLength: 8)
+                Button(action: model.onCapture) {
+                    if model.recording { Label("Record", systemImage: "record.circle") } else { Text("Capture") }
+                }
+                .buttonStyle(PrimaryButtonStyle())
             }
-            if model.recording {
-                BarDivider()
-                RecordingBarControls(options: $model.options)
-            }
-            MenuButton(help: "Options", items: options) { Image(systemName: "ellipsis") }
-            Button(action: model.onCapture) {
-                if model.recording { Label("Record", systemImage: "record.circle") } else { Text("Capture") }
-            }
-            .buttonStyle(PrimaryButtonStyle())
-            .padding(.leading, 6)
-            .padding(.trailing, 2)
         }
+        .padding(14)
+        .frame(width: model.recording ? 470 : 420)
+        .background(Color.white, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous).strokeBorder(Color.black.opacity(0.08)))
+        .shadow(color: .black.opacity(0.18), radius: 18, y: 6)
         .fixedSize()
-        .padding(16)
+        .padding(20)
         .animation(.snappy(duration: 0.22), value: model.recording)
+        .animation(.snappy(duration: 0.18), value: model.mode)
         .onGeometryChange(for: CGSize.self) { $0.size } action: { model.onResize($0) }
+    }
+
+    private func kind(_ title: String, symbol: String, selected: Bool, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Label(title, systemImage: symbol).font(.system(size: 12, weight: .semibold)).padding(.horizontal, 10)
+        }
+        .buttonStyle(ToolButtonStyle(selected: selected, size: CGSize(width: 0, height: 26), tint: .primary))
+        .fixedSize()
+        .accessibilityAddTraits(selected ? .isSelected : [])
     }
 
     private func options() -> [NSMenuItem] {

@@ -757,6 +757,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             onCancel: { [weak self] in self?.recordingTask?.cancel() },
             onRestart: { [weak self] in self?.discardRecording(restart: true) },
             onDelete: { [weak self] in self?.discardRecording(restart: false) }))
+        // measured before sizing is switched off, after that the fitting size reads as zero
+        let height = host.fittingSize.height
         host.sizingOptions = []
         panel.contentView = host
         let area = Self.recordingArea(target)
@@ -764,7 +766,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             ?? NSScreen.screens.first { $0.frame.contains(NSEvent.mouseLocation) } ?? NSScreen.main
         if let screen {
             // wide enough for every state, the capsule centers itself under the recorded area
-            let size = CGSize(width: 420, height: host.fittingSize.height)
+            let size = CGSize(width: 420, height: max(height, 72))
             let bounds = screen.visibleFrame
             let origin = area.map { CaptureGeometry.attach(size, to: $0, within: bounds) } ?? CGPoint(x: bounds.midX - size.width / 2, y: bounds.minY + 8)
             panel.setFrame(CGRect(origin: CGPoint(x: origin.x.rounded(), y: origin.y.rounded()), size: size), display: false)
