@@ -43,6 +43,14 @@ enum CaptureGeometry {
         return rectangle(from: start, to: adjusted)
     }
 
+    // a bar just under an area, above it when the screen ends, inside its bottom when neither fits
+    static func attach(_ size: CGSize, to area: CGRect, within bounds: CGRect) -> CGPoint {
+        let x = min(max(area.midX - size.width / 2, bounds.minX), bounds.maxX - size.width)
+        if area.minY - size.height >= bounds.minY { return CGPoint(x: x, y: area.minY - size.height) }
+        if area.maxY + size.height <= bounds.maxY { return CGPoint(x: x, y: area.maxY) }
+        return CGPoint(x: x, y: max(bounds.minY, area.minY))
+    }
+
     static func displayLocalRect(_ rect: CGRect, displayFrame: CGRect) -> CGRect {
         rect.intersection(displayFrame).offsetBy(dx: -displayFrame.minX, dy: -displayFrame.minY)
     }
@@ -83,6 +91,7 @@ final class SelectionController {
     private var frozenFrames: [FrozenDisplayFrame] = []
     private var snapshots: (() async -> [FrozenDisplayFrame])?
     private var snapshotTask: Task<Void, Never>?
+    private var toolbarSize = CGSize.zero
     private var showsLoupe = false
     private var toolbar: SelectionPanel?
     private var fixedSize: CGSize?
@@ -308,9 +317,31 @@ final class SelectionController {
     }
 
     private func placeToolbar(_ size: CGSize) {
-        guard let toolbar, size.width > 0 else { return }
-        let frame = (NSScreen.screens.first { $0.frame.contains(lastPointer) } ?? NSScreen.screens[0]).visibleFrame
-        toolbar.setFrame(CGRect(x: (frame.midX - size.width / 2).rounded(), y: frame.minY + 12, width: size.width, height: size.height), display: true)
+        toolbarSize = size
+        layoutToolbar(hidden: false)
+    }
+
+    // the bar rides under the chosen area like a part of it, and steps away while the area is being drawn
+    private func layoutToolbar(hidden: Bool) {
+        guard let toolbar, toolbarSize.width > 0 else { return }
+        let area = mode == .fullScreen ? nil : selection
+        let anchor = area.map { CGPoint(x: $0.midX, y: $0.midY) } ?? lastPointer
+        let frame = (NSScreen.screens.first { $0.frame.contains(anchor) } ?? NSScreen.screens[0]).visibleFrame
+        let origin = area.map { CaptureGeometry.attach(toolbarSize, to: $0, within: frame) }
+            ?? CGPoint(x: frame.midX - toolbarSize.width / 2, y: frame.minY + 12)
+        let target = CGRect(origin: CGPoint(x: origin.x.rounded(), y: origin.y.rounded()), size: toolbarSize)
+        if hidden {
+            if toolbar.alphaValue > 0 { toolbar.animator().alphaValue = 0 }
+            return
+        }
+        guard toolbar.frame != target || toolbar.alphaValue < 1 else { return }
+        if toolbar.alphaValue < 1 { toolbar.setFrame(target, display: true) }
+        NSAnimationContext.runAnimationGroup { context in
+            context.duration = 0.16
+            context.timingFunction = CAMediaTimingFunction(name: .easeOut)
+            if toolbar.alphaValue >= 1 { toolbar.animator().setFrame(target, display: true) }
+            toolbar.animator().alphaValue = 1
+        }
     }
 
     private func changeMode(_ newMode: CaptureMode) {
@@ -404,6 +435,7 @@ final class SelectionController {
         }
         let size = selection.map { CGSize(width: $0.width.rounded(), height: $0.height.rounded()) }
         if bar.size != size { bar.size = size }
+        layoutToolbar(hidden: start != nil || drag != nil)
     }
 
     private func handleKey(_ event: NSEvent) {
@@ -783,18 +815,19 @@ struct CaptureBar: View {
 
     private var modes: [CaptureMode] { model.recording ? [.area, .fullScreen, .window] : [.area, .fullScreen, .window, .scrolling, .text] }
 
+    // the choices people make every time stay on the bar, everything else sits in one menu
     var body: some View {
         Island {
             tool("xmark", help: "Close", action: model.onCancel)
             if model.allInOne {
+                BarDivider()
                 if model.allowsRecording {
-                    BarDivider()
                     Segmented {
                         tool("camera", help: "Screenshot", selected: !model.recording, segment: true) { model.onRecording(false) }
-                        tool("video", help: "Record", selected: model.recording, segment: true) { model.onRecording(true) }
+                        tool("record.circle", help: "Record", selected: model.recording, segment: true) { model.onRecording(true) }
                     }
+                    BarDivider()
                 }
-                BarDivider()
                 ForEach(modes) { mode in
                     tool(mode.symbol, help: name(mode), selected: model.mode == mode) { model.onMode(mode) }
                 }
@@ -803,25 +836,48 @@ struct CaptureBar: View {
                 BarDivider()
                 SelectionSizeFields(model: model)
             }
-            if model.allInOne {
-                BarDivider()
-                if model.recording { timer($model.options.countdown, help: "Countdown") }
-                else if model.timerApplies { timer($delay, help: "Timer") }
-            }
             if model.recording {
                 BarDivider()
                 RecordingBarControls(options: $model.options)
             }
+            MenuButton(help: "Options", items: options) { Image(systemName: "ellipsis") }
             Button(action: model.onCapture) {
                 if model.recording { Label("Record", systemImage: "record.circle") } else { Text("Capture") }
             }
             .buttonStyle(PrimaryButtonStyle())
-            .padding(.leading, 8)
+            .padding(.leading, 6)
             .padding(.trailing, 2)
         }
         .fixedSize()
         .padding(16)
+        .animation(.snappy(duration: 0.22), value: model.recording)
         .onGeometryChange(for: CGSize.self) { $0.size } action: { model.onResize($0) }
+    }
+
+    private func options() -> [NSMenuItem] {
+        var items: [NSMenuItem] = []
+        if model.editsSize {
+            items.append(Self.submenu("Aspect Ratio", CaptureBarModel.ratios.enumerated().map { ($0.element.0, $0.offset) }, selected: model.ratio) { model.onRatio($0) })
+        }
+        if model.recording {
+            items.append(Self.submenu("Countdown", [("Off", 0), ("3 Seconds", 3), ("5 Seconds", 5), ("10 Seconds", 10)], selected: model.options.countdown) { model.options.countdown = $0 })
+            items += RecordingBarControls.menu($model.options)
+        } else if model.allInOne, model.timerApplies {
+            items.append(Self.submenu("Timer", [("Off", 0), ("3 Seconds", 3), ("5 Seconds", 5), ("10 Seconds", 10)], selected: delay) { delay = $0 })
+        }
+        return items
+    }
+
+    static func submenu(_ title: String, _ choices: [(String, Int)], selected: Int, choose: @escaping (Int) -> Void) -> NSMenuItem {
+        let item = NSMenuItem(title: title, action: nil, keyEquivalent: "")
+        let menu = NSMenu()
+        for (name, value) in choices {
+            let choice = HandlerMenuItem(name) { choose(value) }
+            choice.state = selected == value ? .on : .off
+            menu.addItem(choice)
+        }
+        item.submenu = menu
+        return item
     }
 
     private func tool(_ symbol: String, help: String, selected: Bool = false, segment: Bool = false, action: @escaping () -> Void) -> some View {
@@ -830,21 +886,6 @@ struct CaptureBar: View {
             .help(help)
             .accessibilityLabel(help)
             .accessibilityAddTraits(selected ? .isSelected : [])
-    }
-
-    private func timer(_ value: Binding<Int>, help: String) -> some View {
-        MenuButton(help: help, width: value.wrappedValue > 0 ? 44 : 30, items: {
-            [0, 3, 5, 10].map { seconds in
-                let item = HandlerMenuItem(seconds == 0 ? "Off" : "\(seconds) Seconds") { value.wrappedValue = seconds }
-                item.state = value.wrappedValue == seconds ? .on : .off
-                return item
-            }
-        }) {
-            HStack(spacing: 3) {
-                Image(systemName: "timer")
-                if value.wrappedValue > 0 { Text("\(value.wrappedValue)s").font(.system(size: 11, weight: .semibold).monospacedDigit()) }
-            }
-        }
     }
 
     private func name(_ mode: CaptureMode) -> String {
@@ -871,18 +912,6 @@ private struct SelectionSizeFields: View {
                 field($model.widthText, .width, label: "Width")
                 Text("×").font(.system(size: 11)).foregroundStyle(.secondary)
                 field($model.heightText, .height, label: "Height")
-                MenuButton(help: "Aspect ratio", width: 52, items: {
-                    CaptureBarModel.ratios.enumerated().map { index, ratio in
-                        let item = HandlerMenuItem(ratio.0) { model.onRatio(index) }
-                        item.state = model.ratio == index ? .on : .off
-                        return item
-                    }
-                }) {
-                    HStack(spacing: 3) {
-                        Text(CaptureBarModel.ratios[model.ratio].0).font(.system(size: 12, weight: .medium))
-                        Image(systemName: "chevron.up.chevron.down").font(.system(size: 8, weight: .semibold)).foregroundStyle(.secondary)
-                    }
-                }
             } else {
                 Text(verbatim: model.size.map { "\(Int($0.width)) × \(Int($0.height))" } ?? "–")
                     .font(.system(size: 12, weight: .medium).monospacedDigit())

@@ -122,9 +122,9 @@ struct Island<Content: View>: View {
     var body: some View {
         HStack(spacing: 2) { content }
             .padding(4)
-            .background(.regularMaterial, in: RoundedRectangle(cornerRadius: Radius.control + 4, style: .continuous))
-            .overlay(RoundedRectangle(cornerRadius: Radius.control + 4, style: .continuous).strokeBorder(Color.primary.opacity(0.08)))
-            .shadow(color: .black.opacity(0.12), radius: 8, y: 2)
+            .background(Color.white, in: RoundedRectangle(cornerRadius: Radius.control + 4, style: .continuous))
+            .overlay(RoundedRectangle(cornerRadius: Radius.control + 4, style: .continuous).strokeBorder(Color.black.opacity(0.08)))
+            .shadow(color: .black.opacity(0.16), radius: 12, y: 3)
     }
 }
 
