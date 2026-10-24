@@ -107,6 +107,16 @@ enum AnnotationTool: String, CaseIterable, Identifiable, Codable, Sendable {
     }
 }
 
+struct AnnotationStyle: Equatable, Sendable {
+    var color = AnnotationColor.coral
+    var lineWidth: Double = 5
+    var fontSize: Double = 28
+    var filled = false
+    var bold = true
+    var italic = false
+    var arrowStyle = ArrowStyle.open
+}
+
 struct ImageAnnotation: Codable, Equatable, Identifiable, Sendable {
     var id = UUID()
     var tool: AnnotationTool
@@ -122,6 +132,15 @@ struct ImageAnnotation: Codable, Equatable, Identifiable, Sendable {
     var number = 1
     var imageID: UUID?
     var arrowStyle: ArrowStyle?
+
+    var style: AnnotationStyle {
+        get { AnnotationStyle(color: color, lineWidth: lineWidth, fontSize: fontSize, filled: filled, bold: bold, italic: italic, arrowStyle: arrowStyle ?? .open) }
+        set {
+            color = newValue.color; lineWidth = newValue.lineWidth; fontSize = newValue.fontSize
+            filled = newValue.filled; bold = newValue.bold; italic = newValue.italic
+            if [.arrow, .doubleArrow].contains(tool) { arrowStyle = newValue.arrowStyle }
+        }
+    }
 
     var bounds: CGRect {
         guard !points.isEmpty else { return rect.standardized }
