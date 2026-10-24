@@ -76,7 +76,8 @@ private struct ToolButtonLabel: View {
     var body: some View {
         configuration.label
             .font(.system(size: 14, weight: .medium))
-            .frame(width: size.width, height: size.height)
+            // a zero width lets a labeled button size to its content
+            .frame(width: size.width > 0 ? size.width : nil, height: size.height)
             .foregroundStyle(selected ? (prominent ? Color.white : tint) : Color.primary.opacity(enabled ? 0.85 : 0.3))
             .background(
                 RoundedRectangle(cornerRadius: Radius.control, style: .continuous)
@@ -121,9 +122,12 @@ struct Island<Content: View>: View {
     var body: some View {
         HStack(spacing: 2) { content }
             .padding(4)
-            .background(.regularMaterial, in: RoundedRectangle(cornerRadius: Radius.control + 4, style: .continuous))
-            .overlay(RoundedRectangle(cornerRadius: Radius.control + 4, style: .continuous).strokeBorder(Color.primary.opacity(0.08)))
-            .shadow(color: .black.opacity(0.12), radius: 8, y: 2)
+            .background {
+                RoundedRectangle(cornerRadius: Radius.control + 4, style: .continuous)
+                    .fill(Color.white)
+                    .shadow(color: .black.opacity(0.16), radius: 12, y: 3)
+            }
+            .overlay(RoundedRectangle(cornerRadius: Radius.control + 4, style: .continuous).strokeBorder(Color.black.opacity(0.08)))
     }
 }
 
@@ -435,23 +439,30 @@ struct FlatToggleStyle: ToggleStyle {
 // a flat menu button showing the current choice, checkmarks come from an inline picker inside
 struct FlatMenu<Content: View>: View {
     let title: String
+    var symbol: String? = nil
+    // reads as plain text until hovered, for values that sit beside a primary action
+    var quiet = false
     @ViewBuilder var content: Content
+    @State private var hovering = false
 
     var body: some View {
         Menu { content } label: {
-            HStack(spacing: 6) {
-                Text(title).font(.system(size: 13))
-                Image(systemName: "chevron.up.chevron.down").font(.system(size: 9, weight: .semibold)).foregroundStyle(.secondary)
+            HStack(spacing: 5) {
+                if let symbol { Image(systemName: symbol).font(.system(size: 11, weight: .medium)).foregroundStyle(.secondary) }
+                Text(title).font(.system(size: quiet ? 12 : 13, weight: quiet ? .medium : .regular))
+                Image(systemName: "chevron.up.chevron.down").font(.system(size: 8, weight: .semibold)).foregroundStyle(.secondary)
             }
-            .padding(.horizontal, 10)
+            .padding(.horizontal, quiet ? 8 : 10)
             .frame(height: 26)
-            .background(Color.primary.opacity(0.06), in: RoundedRectangle(cornerRadius: Radius.control, style: .continuous))
+            .background(Color.primary.opacity(quiet ? (hovering ? 0.06 : 0) : 0.06), in: RoundedRectangle(cornerRadius: Radius.control, style: .continuous))
             .contentShape(Rectangle())
+            .animation(.easeOut(duration: 0.12), value: hovering)
         }
         .menuStyle(.button)
         .menuIndicator(.hidden)
         .buttonStyle(.plain)
         .fixedSize()
+        .onHover { hovering = $0 }
     }
 }
 
@@ -459,9 +470,11 @@ struct FlatMenu<Content: View>: View {
 struct FlatPicker<Value: Hashable>: View {
     @Binding var selection: Value
     let options: [(String, Value)]
+    var symbol: String? = nil
+    var quiet = false
 
     var body: some View {
-        FlatMenu(title: options.first { $0.1 == selection }?.0 ?? "") {
+        FlatMenu(title: options.first { $0.1 == selection }?.0 ?? "", symbol: symbol, quiet: quiet) {
             Picker("", selection: $selection) {
                 ForEach(options, id: \.1) { Text($0.0).tag($0.1) }
             }

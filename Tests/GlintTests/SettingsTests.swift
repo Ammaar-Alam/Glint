@@ -33,14 +33,14 @@ final class SettingsTests: XCTestCase {
         let fresh = defaults()
         CaptureAction.migrate(fresh)
         XCTAssertEqual(CaptureAction.enabled(recording: false, in: fresh), [.popup])
-        XCTAssertEqual(CaptureAction.enabled(recording: true, in: fresh), [.editor])
+        XCTAssertEqual(CaptureAction.enabled(recording: true, in: fresh), [.popup])
 
         let editor = defaults()
         editor.set("editor", forKey: "afterCapture")
         editor.set(true, forKey: "autoCopy")
         CaptureAction.migrate(editor)
         XCTAssertEqual(CaptureAction.enabled(recording: false, in: editor), [.editor, .copy])
-        XCTAssertEqual(CaptureAction.enabled(recording: true, in: editor), [.editor])
+        XCTAssertEqual(CaptureAction.enabled(recording: true, in: editor), [.popup])
 
         let save = defaults()
         save.set("save", forKey: "afterCapture")
@@ -52,6 +52,11 @@ final class SettingsTests: XCTestCase {
         save.set(false, forKey: CaptureAction.key(.save, recording: false))
         CaptureAction.migrate(save)
         XCTAssertEqual(CaptureAction.enabled(recording: false, in: save), [.popup])
+
+        // recordings move to the popup once, a later choice of the editor sticks
+        save.set(true, forKey: CaptureAction.key(.editor, recording: true))
+        CaptureAction.migrate(save)
+        XCTAssertEqual(CaptureAction.enabled(recording: true, in: save), [.popup, .editor])
     }
 
     func testUniqueNamesNeverReplaceFiles() throws {

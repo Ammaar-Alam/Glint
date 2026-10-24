@@ -173,20 +173,16 @@ final class CaptureTests: XCTestCase {
         return Array(UnsafeBufferPointer(start: pointer, count: image.width * image.height * 4))
     }
 
-    @MainActor
-    func testCaptureBarAppliesTypedSizeBeforeCapturing() {
-        let model = CaptureBarModel(allInOne: true, allowsRecording: false)
-        var applied: [(CGSize, Bool)] = []
-        model.onSize = { applied.append(($0, $1)) }
-        model.commitSize()
-        XCTAssertTrue(applied.isEmpty)
-        model.widthText = "640"
-        model.heightText = "400"
-        model.editedWidth = true
-        model.commitSize()
-        model.commitSize()
-        XCTAssertEqual(applied.count, 1)
-        XCTAssertEqual(applied.first?.0, CGSize(width: 640, height: 400))
-        XCTAssertEqual(applied.first?.1, true)
+    func testBarsAttachUnderTheAreaThenAboveThenInside() {
+        let screen = CGRect(x: 0, y: 0, width: 1000, height: 800)
+        let bar = CGSize(width: 300, height: 70)
+        // room below, centered under the area
+        XCTAssertEqual(CaptureGeometry.attach(bar, to: CGRect(x: 100, y: 300, width: 400, height: 200), within: screen), CGPoint(x: 150, y: 230))
+        // the area touches the bottom, the bar goes above it
+        XCTAssertEqual(CaptureGeometry.attach(bar, to: CGRect(x: 100, y: 20, width: 400, height: 200), within: screen), CGPoint(x: 150, y: 220))
+        // the area fills the screen, the bar sits inside its bottom
+        XCTAssertEqual(CaptureGeometry.attach(bar, to: screen, within: screen), CGPoint(x: 350, y: 0))
+        // an area at the edge keeps the bar on screen
+        XCTAssertEqual(CaptureGeometry.attach(bar, to: CGRect(x: 900, y: 300, width: 100, height: 100), within: screen).x, 700)
     }
 }
