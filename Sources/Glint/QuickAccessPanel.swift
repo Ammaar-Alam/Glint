@@ -3,14 +3,32 @@ import AppKit
 struct ShelfState {
     private(set) var ids: [UUID] = []
     private(set) var lastDismissed: UUID?
+    private(set) var editing: Set<UUID> = []
+    private(set) var pending: [UUID] = []
+    var tucked: Set<UUID> { Set(ids).intersection(editing) }
 
-    mutating func insert(_ id: UUID) {
+    mutating func setEditing(_ id: UUID, _ active: Bool) {
+        if active { editing.insert(id) } else { editing.remove(id) }
+    }
+
+    mutating func takePending() -> [UUID] {
+        let result = pending
+        pending.removeAll()
+        return result
+    }
+
+    mutating func insert(_ id: UUID, deferred: Bool = false) {
+        pending.removeAll { $0 == id }
+        if deferred { pending.append(id); return }
         ids.removeAll { $0 == id }
         ids.insert(id, at: 0)
     }
 
-    mutating func replace(_ old: UUID, with new: UUID) {
-        if let index = ids.firstIndex(of: old) { ids[index] = new } else { insert(new) }
+    mutating func replace(_ old: UUID, with new: UUID, deferred: Bool = false) {
+        if editing.remove(old) != nil { editing.insert(new) }
+        if let index = pending.firstIndex(of: old) { pending[index] = new }
+        else if let index = ids.firstIndex(of: old) { ids[index] = new }
+        else { insert(new, deferred: deferred) }
     }
 
     mutating func dismiss(_ id: UUID) {
@@ -42,11 +60,10 @@ final class QuickAccessPanel: NSPanel {
     }
     // a swap that landed mid drag waits so the dragged card is not rebuilt out from under it
     private var needsRebuild = false
-    private var pendingCaptures: [CaptureItem] = []
     private var pendingTimer: Timer?
     private var isCaptureSuppressed = false
     // cards whose editor is open wait at the screen edge until it closes
-    private var tucked: Set<UUID> = []
+    private var tucked: Set<UUID> { shelf.tucked }
     private var cards: [UUID: QuickAccessCard] = [:]
     // edits that arrived while tucked flash once when they come back
     private var freshEdits: Set<UUID> = []
@@ -74,39 +91,28 @@ final class QuickAccessPanel: NSPanel {
     }
 
     func present(_ item: CaptureItem, replacing old: UUID? = nil) {
-        // a saved edit swaps into its original's slot, still tucked while the editor stays open,
-        // so it never waits behind the pointer like a new card would
-        if let old, shelf.ids.contains(old) {
-            captures[item.id] = item
-            shelf.replace(old, with: item.id)
-            if tucked.remove(old) != nil { tucked.insert(item.id); freshEdits.insert(item.id) }
-            lastInteraction = Date()
-            if isDraggingCapture { needsRebuild = true } else { rebuild() }
-            return
-        }
-        if isCaptureSuppressed || (isVisible && (frame.contains(NSEvent.mouseLocation) || isDraggingCapture || NSEvent.pressedMouseButtons != 0)) {
-            pendingCaptures.removeAll { $0.id == item.id }
-            pendingCaptures.append(item)
+        let deferred = isCaptureSuppressed || (isVisible && (frame.contains(NSEvent.mouseLocation) || isDraggingCapture || NSEvent.pressedMouseButtons != 0))
+        captures[item.id] = item
+        if let old {
+            shelf.replace(old, with: item.id, deferred: deferred)
+            freshEdits.remove(old)
+            if shelf.editing.contains(item.id) { freshEdits.insert(item.id) }
+        } else { shelf.insert(item.id, deferred: deferred) }
+        if shelf.pending.contains(item.id) {
             if !isCaptureSuppressed { schedulePendingCaptures() }
             return
         }
-        captures[item.id] = item
-        shelf.insert(item.id)
         lastInteraction = Date()
-        rebuild()
-        show()
-        startDismissTimer()
+        if isDraggingCapture { needsRebuild = true } else { rebuild() }
+        if !isCaptureSuppressed { show(); startDismissTimer() }
     }
 
-    func tuck(_ item: CaptureItem) {
-        guard shelf.ids.contains(item.id), tucked.insert(item.id).inserted else { return }
-        slide(item.id)
-    }
-
-    func untuck(_ id: UUID) {
-        guard tucked.remove(id) != nil else { return }
+    func setEditing(_ id: UUID, _ active: Bool) {
+        let wasTucked = tucked.contains(id)
+        shelf.setEditing(id, active)
+        guard wasTucked != tucked.contains(id) else { return }
         lastInteraction = Date()
-        let fresh = freshEdits.remove(id) != nil
+        let fresh = !active && freshEdits.remove(id) != nil
         slide(id) { [weak self] in if fresh { self?.cards[id]?.flash() } }
     }
 
@@ -136,9 +142,7 @@ final class QuickAccessPanel: NSPanel {
                       !self.isVisible || !self.frame.contains(NSEvent.mouseLocation) else { return }
                 self.pendingTimer?.invalidate()
                 self.pendingTimer = nil
-                let pending = self.pendingCaptures
-                self.pendingCaptures.removeAll()
-                for item in pending { self.present(item) }
+                for id in self.shelf.takePending() { if let item = self.captures[id] { self.present(item) } }
             }
         }
         pendingTimer = timer
@@ -192,8 +196,7 @@ final class QuickAccessPanel: NSPanel {
     }
 
     func dismissAll() {
-        for item in pendingCaptures { captures[item.id] = item; shelf.insert(item.id) }
-        pendingCaptures.removeAll()
+        for id in shelf.takePending() { shelf.insert(id) }
         pendingTimer?.invalidate()
         pendingTimer = nil
         slideOut(shelf.ids) { [weak self] in
@@ -247,12 +250,7 @@ final class QuickAccessPanel: NSPanel {
     func restoreAfterCapture() {
         isCaptureSuppressed = false
         lastInteraction = Date()
-        let pending = pendingCaptures
-        pendingCaptures.removeAll()
-        for item in pending {
-            captures[item.id] = item
-            shelf.insert(item.id)
-        }
+        for id in shelf.takePending() { shelf.insert(id) }
         rebuild()
         if !shelf.ids.isEmpty { show(); startDismissTimer() }
     }
@@ -296,7 +294,6 @@ final class QuickAccessPanel: NSPanel {
         if shelf.ids.count > 1 { views.append((nil, makeFooter(shown: shown))) }
         // newest card sits closest to the screen corner
         if bottom { views.reverse() }
-        tucked.formIntersection(shelf.ids)
         placesRight = right
         // the panel reaches the screen edge so a tucked card slides under it
         let width = Self.cardSize.width + Self.inset * 2 + Self.sideMargin
