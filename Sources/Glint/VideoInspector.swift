@@ -519,7 +519,7 @@ private struct ExportPanel: View {
                 }
             }
         }
-        .onAppear {
+        .onChange(of: project.edits, initial: true) {
             customWidth = project.edits.customWidth ?? Int(size.width)
             customHeight = project.edits.customHeight ?? Int(size.height)
         }

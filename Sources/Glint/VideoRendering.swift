@@ -133,12 +133,12 @@ final class VideoInstruction: NSObject, AVVideoCompositionInstructionProtocol, @
     let activity: VideoActivity
     let project: VideoProject
 
-    init(project: VideoProject, screenTrackID: CMPersistentTrackID, cameraTrackID: CMPersistentTrackID?, screenTransform: CGAffineTransform, cameraTransform: CGAffineTransform, backgroundImage: CIImage?) {
+    init(project: VideoProject, screenTrackID: CMPersistentTrackID, cameraTrackID: CMPersistentTrackID?, screenTransform: CGAffineTransform, cameraTransform: CGAffineTransform, backgroundImage: CIImage?, activity: VideoActivity? = nil) {
         self.project = project
         self.screenTrackID = screenTrackID; self.cameraTrackID = cameraTrackID
         self.screenTransform = screenTransform; self.cameraTransform = cameraTransform
         self.backgroundImage = backgroundImage
-        activity = VideoActivity(project: project)
+        self.activity = activity ?? VideoActivity(project: project)
         timeRange = CMTimeRange(start: .zero, duration: CMTime(seconds: project.editedDuration, preferredTimescale: 600))
         requiredSourceTrackIDs = [screenTrackID, cameraTrackID].compactMap { $0 }.map { NSNumber(value: $0) }
     }
