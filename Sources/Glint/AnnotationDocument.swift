@@ -33,7 +33,7 @@ struct AnnotationColor: Codable, Equatable, Sendable {
 }
 
 enum AnnotationTool: String, CaseIterable, Identifiable, Codable, Sendable {
-    case select, arrow, curvedArrow, line, rectangle, ellipse, pen, text, counter
+    case select, arrow, doubleArrow, curvedArrow, line, rectangle, ellipse, pen, text, counter
     case highlight, spotlight, pixelate, blur, redact, crop, image
 
     var id: String { rawValue }
@@ -41,6 +41,7 @@ enum AnnotationTool: String, CaseIterable, Identifiable, Codable, Sendable {
         switch self {
         case .select: return "Select"
         case .arrow: return "Arrow"
+        case .doubleArrow: return "Double arrow"
         case .curvedArrow: return "Curved arrow"
         case .line: return "Line"
         case .rectangle: return "Rectangle"
@@ -62,6 +63,7 @@ enum AnnotationTool: String, CaseIterable, Identifiable, Codable, Sendable {
         switch self {
         case .select: return "cursorarrow"
         case .arrow: return "arrow.up.right"
+        case .doubleArrow: return "arrow.left.and.right"
         case .curvedArrow: return "arrow.turn.up.right"
         case .line: return "line.diagonal"
         case .rectangle: return "rectangle"
@@ -83,6 +85,7 @@ enum AnnotationTool: String, CaseIterable, Identifiable, Codable, Sendable {
         switch self {
         case .select: return "v"
         case .arrow: return "a"
+        case .doubleArrow: return nil
         case .curvedArrow: return "u"
         case .line: return "l"
         case .rectangle: return "r"
@@ -126,7 +129,7 @@ struct ImageAnnotation: Codable, Equatable, Identifiable, Sendable {
 
     // strokes count where they are drawn, not across their whole bounding box
     func hitTest(_ point: CGPoint, tolerance: CGFloat) -> Bool {
-        guard [.pen, .line, .arrow, .curvedArrow].contains(tool), let start = points.first, let end = points.last, points.count >= 2 else {
+        guard [.pen, .line, .arrow, .doubleArrow, .curvedArrow].contains(tool), let start = points.first, let end = points.last, points.count >= 2 else {
             return bounds.insetBy(dx: -tolerance, dy: -tolerance).contains(point)
         }
         var path = points

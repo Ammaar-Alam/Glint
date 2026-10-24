@@ -127,13 +127,14 @@ struct Island<Content: View>: View {
     }
 }
 
-// a color swatch that edits through the system color panel, a rainbow when there is no single color
+// a color swatch that opens the color picker, a rainbow when there is no single color
 struct ColorWellButton: View {
     let color: NSColor?
     let onChange: (NSColor) -> Void
+    @State private var open = false
 
     var body: some View {
-        Button { ColorPanelBridge.shared.open(color ?? .systemRed, onChange: onChange) } label: {
+        Button { open.toggle() } label: {
             Circle()
                 .fill(color.map { AnyShapeStyle(Color(nsColor: $0)) } ?? AnyShapeStyle(AngularGradient(colors: [.red, .yellow, .green, .cyan, .blue, .purple, .red], center: .center)))
                 .overlay(Circle().strokeBorder(Color.primary.opacity(0.2), lineWidth: 0.5))
@@ -143,26 +144,145 @@ struct ColorWellButton: View {
         }
         .buttonStyle(.plain)
         .help("Colors")
+        .popover(isPresented: $open, arrowEdge: .bottom) {
+            ColorPickerPanel(color: color ?? .systemRed, onChange: onChange).padding(14)
+        }
     }
 }
 
-@MainActor
-final class ColorPanelBridge: NSObject {
-    static let shared = ColorPanelBridge()
-    private var onChange: ((NSColor) -> Void)?
+struct ColorDot: View {
+    let color: NSColor
+    let selected: Bool
+    var size: CGFloat = 18
+    let action: () -> Void
 
-    func open(_ color: NSColor, onChange: @escaping (NSColor) -> Void) {
-        let panel = NSColorPanel.shared
-        panel.setTarget(nil)
-        panel.showsAlpha = false
-        panel.color = color
-        self.onChange = onChange
-        panel.setTarget(self)
-        panel.setAction(#selector(changed(_:)))
-        panel.orderFront(nil)
+    var body: some View {
+        Button(action: action) {
+            Circle()
+                .fill(Color(nsColor: color))
+                .overlay(Circle().strokeBorder(Color.black.opacity(0.15), lineWidth: 0.5))
+                .frame(width: size, height: size)
+                .padding(3)
+                .overlay(Circle().strokeBorder(selected ? Color.primary.opacity(0.85) : .clear, lineWidth: 1.5))
+                .scaleEffect(selected ? 1.08 : 1)
+                .animation(.spring(response: 0.25, dampingFraction: 0.7), value: selected)
+                .frame(width: size + 10, height: size + 8)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+    }
+}
+
+// the last colors picked from the wheel, shared by every picker
+@MainActor
+enum RecentColors {
+    private static let key = "recentColors"
+    private static let limit = 8
+
+    static var all: [NSColor] {
+        (UserDefaults.standard.array(forKey: key) as? [[Double]] ?? []).compactMap { rgb in
+            rgb.count == 3 ? NSColor(srgbRed: rgb[0], green: rgb[1], blue: rgb[2], alpha: 1) : nil
+        }
     }
 
-    @objc private func changed(_ panel: NSColorPanel) { onChange?(panel.color) }
+    static func add(_ color: NSColor) {
+        guard let rgb = color.usingColorSpace(.sRGB) else { return }
+        let entry = [rgb.redComponent, rgb.greenComponent, rgb.blueComponent].map { (Double($0) * 255).rounded() / 255 }
+        let kept = (UserDefaults.standard.array(forKey: key) as? [[Double]] ?? []).filter { $0 != entry }
+        UserDefaults.standard.set(Array(([entry] + kept).prefix(limit)), forKey: key)
+    }
+}
+
+// recent colors, a hue and saturation wheel and a brightness bar, all in place
+struct ColorPickerPanel: View {
+    let color: NSColor
+    let onChange: (NSColor) -> Void
+    var onEditing: (Bool) -> Void = { _ in }
+    @State private var hue: CGFloat = 0
+    @State private var saturation: CGFloat = 1
+    @State private var brightness: CGFloat = 1
+    @State private var editing = false
+    @State private var recents: [NSColor] = []
+
+    private static let wheel: CGFloat = 148
+    private var current: NSColor { NSColor(hue: hue, saturation: saturation, brightness: brightness, alpha: 1) }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            if !recents.isEmpty {
+                HStack(spacing: 0) {
+                    ForEach(Array(recents.enumerated()), id: \.offset) { _, recent in
+                        ColorDot(color: recent, selected: false, size: 14) { load(recent); onChange(recent); RecentColors.add(recent) }
+                    }
+                }
+                .padding(.horizontal, -4)
+            }
+            ZStack {
+                Circle().fill(AngularGradient(colors: (0...6).map { Color(hue: Double($0) / 6, saturation: 1, brightness: 1) }, center: .center))
+                Circle().fill(RadialGradient(colors: [.white, .white.opacity(0)], center: .center, startRadius: 0, endRadius: Self.wheel / 2))
+                Circle().fill(Color.black.opacity(1 - brightness))
+                Circle().strokeBorder(Color.primary.opacity(0.12), lineWidth: 0.5)
+                Circle()
+                    .fill(Color(nsColor: current))
+                    .frame(width: 16, height: 16)
+                    .overlay(Circle().strokeBorder(.white, lineWidth: 2.5))
+                    .shadow(color: .black.opacity(0.3), radius: 2, y: 1)
+                    .offset(x: cos(hue * 2 * .pi) * saturation * Self.wheel / 2, y: sin(hue * 2 * .pi) * saturation * Self.wheel / 2)
+            }
+            .frame(width: Self.wheel, height: Self.wheel)
+            .contentShape(Circle())
+            .gesture(DragGesture(minimumDistance: 0).onChanged { value in
+                let dx = value.location.x - Self.wheel / 2, dy = value.location.y - Self.wheel / 2
+                let angle = atan2(dy, dx) / (2 * .pi)
+                hue = angle < 0 ? angle + 1 : angle
+                saturation = min(1, hypot(dx, dy) / (Self.wheel / 2))
+                changed()
+            }.onEnded { _ in ended() })
+            .frame(maxWidth: .infinity)
+            GeometryReader { proxy in
+                Capsule()
+                    .fill(LinearGradient(colors: [.black, Color(nsColor: NSColor(hue: hue, saturation: saturation, brightness: 1, alpha: 1))], startPoint: .leading, endPoint: .trailing))
+                    .overlay(Capsule().strokeBorder(Color.primary.opacity(0.12), lineWidth: 0.5))
+                    .overlay(alignment: .leading) {
+                        Circle()
+                            .fill(Color(nsColor: current))
+                            .frame(width: 16, height: 16)
+                            .overlay(Circle().strokeBorder(.white, lineWidth: 2.5))
+                            .shadow(color: .black.opacity(0.3), radius: 2, y: 1)
+                            .offset(x: brightness * (proxy.size.width - 16))
+                    }
+                    .contentShape(Capsule())
+                    .gesture(DragGesture(minimumDistance: 0).onChanged { value in
+                        brightness = min(1, max(0, (value.location.x - 8) / (proxy.size.width - 16)))
+                        changed()
+                    }.onEnded { _ in ended() })
+            }
+            .frame(height: 16)
+        }
+        .frame(width: Self.wheel + 8)
+        .onAppear { load(color); recents = RecentColors.all }
+        .onChange(of: color) { _, value in if !editing { load(value) } }
+    }
+
+    private func load(_ color: NSColor) {
+        guard let rgb = color.usingColorSpace(.sRGB) else { return }
+        // grays keep the hue the wheel last showed
+        if rgb.saturationComponent > 0.001 { hue = rgb.hueComponent }
+        saturation = rgb.saturationComponent
+        brightness = rgb.brightnessComponent
+    }
+
+    private func changed() {
+        if !editing { editing = true; onEditing(true) }
+        onChange(current)
+    }
+
+    private func ended() {
+        editing = false
+        onEditing(false)
+        RecentColors.add(current)
+        recents = RecentColors.all
+    }
 }
 
 // solid buttons over a dimmed capture, matching the popup card actions
@@ -359,4 +479,9 @@ struct FlatTextFieldStyle: TextFieldStyle {
             .frame(height: 26)
             .background(Color.primary.opacity(0.06), in: RoundedRectangle(cornerRadius: Radius.control, style: .continuous))
     }
+}
+
+// content under a full-size title bar must not drag the window, a bar's empty background does that instead
+final class StaticHostingView<Content: View>: NSHostingView<Content> {
+    override var mouseDownCanMoveWindow: Bool { false }
 }
