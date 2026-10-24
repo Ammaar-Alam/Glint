@@ -27,6 +27,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var historyWindow: NSWindow?
     private var settingsWindow: NSWindow?
     private var recordingPanel: NSPanel?
+    // the copy to hand over to when another Glint is already running
+    private var survivor: URL?
+    private var handedOver = false
     // outlines the recorded area and counts down over it, never part of the recording since Glint is excluded
     private var recordingFrame: NSPanel?
     private var recordingOptions = RecordingOptions()
@@ -45,7 +48,31 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var clipboardTask: Task<Void, Never>?
     private var recordingHiddenWindows: [NSWindow] = []
 
+    // one Glint at a time, decided before any open event arrives: the earliest launched copy stays,
+    // ties go to the lower process id, so copies starting together all pick the same survivor
+    func applicationWillFinishLaunching(_ notification: Notification) {
+        let me = NSRunningApplication.current
+        func seniority(_ app: NSRunningApplication) -> (Date, pid_t) { (app.launchDate ?? .distantFuture, app.processIdentifier) }
+        survivor = NSRunningApplication.runningApplications(withBundleIdentifier: Bundle.main.bundleIdentifier ?? "")
+            .filter { !$0.isTerminated }
+            .min { seniority($0) < seniority($1) }
+            .flatMap { $0.processIdentifier == me.processIdentifier ? nil : $0.bundleURL }
+    }
+
+    // a losing copy passes whatever it was asked to open to the survivor, which comes forward either way
+    private func handOver(_ urls: [URL]) {
+        guard let survivor else { return }
+        if urls.isEmpty { NSWorkspace.shared.openApplication(at: survivor, configuration: NSWorkspace.OpenConfiguration()) }
+        else { NSWorkspace.shared.open(urls, withApplicationAt: survivor, configuration: NSWorkspace.OpenConfiguration()) }
+        handedOver = true
+    }
+
     func applicationDidFinishLaunching(_ notification: Notification) {
+        if survivor != nil {
+            if !handedOver { handOver([]) }
+            NSApp.terminate(nil)
+            return
+        }
         NSApp.appearance = NSAppearance(named: .aqua)
         let launchEvent = NSAppleEventManager.shared().currentAppleEvent
         let launchReason = launchEvent?.paramDescriptor(forKeyword: keyAEPropData)?.enumCodeValue
@@ -131,12 +158,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     func application(_ sender: NSApplication, openFiles filenames: [String]) {
+        if survivor != nil { handOver(filenames.map { URL(fileURLWithPath: $0) }); sender.reply(toOpenOrPrint: .success); return }
         guard terminationTask == nil else { sender.reply(toOpenOrPrint: .cancel); return }
         for filename in filenames { importFile(URL(fileURLWithPath: filename), openEditor: true) }
         sender.reply(toOpenOrPrint: .success)
     }
 
     func application(_ application: NSApplication, open urls: [URL]) {
+        if survivor != nil { handOver(urls); return }
         guard terminationTask == nil else { return }
         for url in urls {
             if url.isFileURL { importFile(url, openEditor: true); continue }
