@@ -29,6 +29,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var recordingPanel: NSPanel?
     private var recordingOptions = RecordingOptions()
     private var editors: [NSWindowController] = []
+    // the popup card standing in for each open editor, by editor window
+    private var editedCards: [ObjectIdentifier: EditedCard] = [:]
     private var pins: [PinnedImagePanel] = []
     private var captureTask: Task<Void, Never>?
     private var recordingTask: Task<Void, Never>?
@@ -80,6 +82,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             MainActor.assumeIsolated {
                 guard let window = notification.object as? NSWindow else { return }
                 self?.editors.removeAll { $0.window === window }
+                if let card = self?.editedCards.removeValue(forKey: ObjectIdentifier(window)) {
+                    card.closed = true
+                    if card.imports == 0 { self?.shelf.untuck(card.id) }
+                }
                 self?.updateDock(closing: window)
             }
         }
@@ -484,7 +490,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         guard terminationTask == nil else { return }
         let url = item.url(in: library.root)
         guard FileManager.default.fileExists(atPath: url.path) else { showError(GlintError.message("This capture is no longer available.")); return }
-        let exported: (URL) -> Void = { [weak self] url in self?.importFile(url, openEditor: false) }
+        let card = EditedCard(id: item.id)
+        let exported: (URL) -> Void = { [weak self] url in self?.importEdit(url, card: card) }
         let editor: NSWindowController
         if item.kind.isVideo { editor = VideoEditorWindowController(url: url, onExport: exported) }
         else {
@@ -509,9 +516,29 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             editor = imageEditor
         }
         editors.append(editor)
+        if let window = editor.window { editedCards[ObjectIdentifier(window)] = card }
+        shelf.tuck(item)
         editor.showWindow(nil)
         editor.window?.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
+    }
+
+    // each saved version replaces the card, which comes back once the editor closes and its last save lands
+    private func importEdit(_ url: URL, card: EditedCard) {
+        pendingWrites += 1
+        card.imports += 1
+        Task {
+            defer {
+                pendingWrites -= 1
+                card.imports -= 1
+                if card.closed, card.imports == 0 { shelf.untuck(card.id) }
+            }
+            do {
+                let item = try await library.ingest(url, title: url.deletingPathExtension().lastPathComponent)
+                shelf.present(item, replacing: card.id)
+                card.id = item.id
+            } catch { showError(error) }
+        }
     }
 
     func copy(_ item: CaptureItem) {
@@ -923,4 +950,12 @@ struct OCRResultView: View {
             }
         }.padding(20).frame(minWidth: 360, minHeight: 220)
     }
+}
+
+@MainActor
+private final class EditedCard {
+    var id: UUID
+    var imports = 0
+    var closed = false
+    init(id: UUID) { self.id = id }
 }

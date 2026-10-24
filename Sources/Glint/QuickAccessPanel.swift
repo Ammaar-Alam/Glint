@@ -9,6 +9,10 @@ struct ShelfState {
         ids.insert(id, at: 0)
     }
 
+    mutating func replace(_ old: UUID, with new: UUID) {
+        if let index = ids.firstIndex(of: old) { ids[index] = new } else { insert(new) }
+    }
+
     mutating func dismiss(_ id: UUID) {
         ids.removeAll { $0 == id }
         lastDismissed = id
@@ -37,6 +41,10 @@ final class QuickAccessPanel: NSPanel {
     private var pendingCaptures: [CaptureItem] = []
     private var pendingTimer: Timer?
     private var isCaptureSuppressed = false
+    // cards whose editor is open wait at the screen edge until it closes
+    private var tucked: Set<UUID> = []
+    private var cards: [UUID: NSView] = [:]
+    private var placesRight = false
     var onCommand: ((CaptureCommand, CaptureItem) -> Void)?
     var onHistory: (() -> Void)?
 
@@ -57,7 +65,7 @@ final class QuickAccessPanel: NSPanel {
         setAccessibilityLabel("Recent Captures")
     }
 
-    func present(_ item: CaptureItem) {
+    func present(_ item: CaptureItem, replacing old: UUID? = nil) {
         if isCaptureSuppressed || (isVisible && (frame.contains(NSEvent.mouseLocation) || isDraggingCapture || NSEvent.pressedMouseButtons != 0)) {
             pendingCaptures.removeAll { $0.id == item.id }
             pendingCaptures.append(item)
@@ -65,11 +73,43 @@ final class QuickAccessPanel: NSPanel {
             return
         }
         captures[item.id] = item
-        shelf.insert(item.id)
+        // a saved edit takes its original's place, still tucked while the editor stays open
+        if let old, shelf.ids.contains(old) {
+            shelf.replace(old, with: item.id)
+            if tucked.remove(old) != nil { tucked.insert(item.id) }
+        } else { shelf.insert(item.id) }
         lastInteraction = Date()
         rebuild()
         show()
         startDismissTimer()
+    }
+
+    func tuck(_ item: CaptureItem) {
+        guard shelf.ids.contains(item.id), tucked.insert(item.id).inserted else { return }
+        slide(item.id)
+    }
+
+    func untuck(_ id: UUID) {
+        guard tucked.remove(id) != nil else { return }
+        lastInteraction = Date()
+        slide(id)
+    }
+
+    private func slide(_ id: UUID) {
+        guard let card = cards[id], let width = contentView?.bounds.width else { return }
+        let x = cardX(id, view: card, width: width)
+        NSAnimationContext.runAnimationGroup { context in
+            context.duration = 0.3
+            context.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+            card.animator().setFrameOrigin(NSPoint(x: x, y: card.frame.minY))
+        }
+    }
+
+    // a tucked card leaves a sliver showing at the screen edge
+    private func cardX(_ id: UUID?, view: NSView, width: CGFloat) -> CGFloat {
+        let peek: CGFloat = 18
+        if let id, tucked.contains(id) { return placesRight ? width - peek : peek - view.frame.width }
+        return placesRight ? width - Self.inset - Self.sideMargin - view.frame.width : Self.inset + Self.sideMargin
     }
 
     private func schedulePendingCaptures() {
@@ -166,23 +206,27 @@ final class QuickAccessPanel: NSPanel {
         let visible = screen?.visibleFrame ?? CGRect(x: 0, y: 0, width: 1024, height: 768)
         // show only as many cards as the screen fits, the footer opens the rest in history
         let shown = Self.cardsThatFit(height: visible.height - Self.endMargin - Self.sideMargin, footer: shelf.ids.count > 1)
-        var views: [NSView] = shelf.ids.prefix(shown).compactMap { id in captures[id].map(makeCard) }
-        if shelf.ids.count > 1 { views.append(makeFooter(shown: shown)) }
+        var views: [(UUID?, NSView)] = shelf.ids.prefix(shown).compactMap { id in captures[id].map { (id, makeCard($0)) } }
+        if shelf.ids.count > 1 { views.append((nil, makeFooter(shown: shown))) }
         // newest card sits closest to the screen corner
         if bottom { views.reverse() }
-        let width = Self.cardSize.width + Self.inset * 2
-        let height = views.reduce(Self.inset * 2 - Self.gap) { $0 + $1.frame.height + Self.gap }
+        tucked.formIntersection(shelf.ids)
+        placesRight = right
+        // the panel reaches the screen edge so a tucked card slides under it
+        let width = Self.cardSize.width + Self.inset * 2 + Self.sideMargin
+        let height = views.reduce(Self.inset * 2 - Self.gap) { $0 + $1.1.frame.height + Self.gap }
         let container = NSView(frame: NSRect(x: 0, y: 0, width: width, height: height))
+        cards = [:]
         var y = height - Self.inset
-        for view in views {
+        for (id, view) in views {
             y -= view.frame.height
-            let x = right ? width - Self.inset - view.frame.width : Self.inset
-            view.setFrameOrigin(NSPoint(x: x, y: y))
+            view.setFrameOrigin(NSPoint(x: cardX(id, view: view, width: width), y: y))
+            if let id { cards[id] = view }
             container.addSubview(view)
             y -= Self.gap
         }
         contentView = container
-        let x = right ? visible.maxX - width - Self.sideMargin : visible.minX + Self.sideMargin
+        let x = right ? visible.maxX - width : visible.minX
         let originY = bottom ? visible.minY + Self.endMargin : visible.maxY - min(height, visible.height) - Self.sideMargin
         setFrame(CGRect(x: x, y: originY, width: width, height: min(height, visible.height)), display: true)
     }
@@ -215,10 +259,6 @@ final class QuickAccessPanel: NSPanel {
             switch command {
             case .close: self?.dismiss(item)
             case .closeAll: self?.dismissAll()
-            // the capture moves into the editor, so its card steps aside
-            case .edit:
-                self?.interact { self?.onCommand?(command, item) }
-                self?.dismiss(item)
             default: self?.interact { self?.onCommand?(command, item) }
             }
         }
@@ -271,7 +311,7 @@ final class QuickAccessPanel: NSPanel {
                 guard let self else { return }
                 if self.frame.contains(NSEvent.mouseLocation) || self.isDraggingCapture || self.isKeyWindow || NSEvent.pressedMouseButtons != 0 {
                     self.lastInteraction = Date()
-                } else if Date().timeIntervalSince(self.lastInteraction) >= seconds {
+                } else if self.tucked.isEmpty, Date().timeIntervalSince(self.lastInteraction) >= seconds {
                     self.dismissAll()
                 }
             }
