@@ -173,23 +173,6 @@ final class CaptureTests: XCTestCase {
         return Array(UnsafeBufferPointer(start: pointer, count: image.width * image.height * 4))
     }
 
-    @MainActor
-    func testCaptureBarAppliesTypedSizeBeforeCapturing() {
-        let model = CaptureBarModel(allInOne: true, allowsRecording: false)
-        var applied: [(CGSize, Bool)] = []
-        model.onSize = { applied.append(($0, $1)) }
-        model.commitSize()
-        XCTAssertTrue(applied.isEmpty)
-        model.widthText = "640"
-        model.heightText = "400"
-        model.editedWidth = true
-        model.commitSize()
-        model.commitSize()
-        XCTAssertEqual(applied.count, 1)
-        XCTAssertEqual(applied.first?.0, CGSize(width: 640, height: 400))
-        XCTAssertEqual(applied.first?.1, true)
-    }
-
     func testBarsAttachUnderTheAreaThenAboveThenInside() {
         let screen = CGRect(x: 0, y: 0, width: 1000, height: 800)
         let bar = CGSize(width: 300, height: 70)

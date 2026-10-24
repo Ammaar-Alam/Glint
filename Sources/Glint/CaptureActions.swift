@@ -31,15 +31,19 @@ enum CaptureAction: String, CaseIterable, Identifiable {
         Set(allCases.filter { defaults.bool(forKey: key($0, recording: recording)) })
     }
 
-    // carries the old single after-capture choice and copy toggle over, recordings always opened the editor
+    // carries the old single after-capture choice and copy toggle over, recordings land in the popup like screenshots
     static func migrate(_ defaults: UserDefaults = .standard) {
-        guard defaults.object(forKey: key(.popup, recording: false)) == nil else { return }
-        let legacy = defaults.string(forKey: "afterCapture")
-        let screenshot: Set<CaptureAction> = [legacy == "editor" ? .editor : legacy == "save" ? .save : .popup]
-        for action in allCases {
-            defaults.set(screenshot.contains(action) || (action == .copy && defaults.bool(forKey: "autoCopy")), forKey: key(action, recording: false))
-            defaults.set(action == .editor, forKey: key(action, recording: true))
+        if defaults.object(forKey: key(.popup, recording: false)) == nil {
+            let legacy = defaults.string(forKey: "afterCapture")
+            let screenshot: Set<CaptureAction> = [legacy == "editor" ? .editor : legacy == "save" ? .save : .popup]
+            for action in allCases {
+                defaults.set(screenshot.contains(action) || (action == .copy && defaults.bool(forKey: "autoCopy")), forKey: key(action, recording: false))
+            }
         }
+        // recordings used to open the editor by default, they now wait in the popup once
+        guard !defaults.bool(forKey: "recordingPopupDefault") else { return }
+        defaults.set(true, forKey: "recordingPopupDefault")
+        for action in allCases { defaults.set(action == .popup, forKey: key(action, recording: true)) }
     }
 }
 
