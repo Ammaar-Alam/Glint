@@ -54,4 +54,39 @@ final class EditorHitTests: XCTestCase {
         XCTAssertEqual(wide.maxX, 400, accuracy: 0.001)
         XCTAssertEqual(wide.maxY, 300, accuracy: 0.001)
     }
+
+    func testSelectingAnArrowAdoptsItsStyle() async throws {
+        let editor = try await openEditor()
+        defer { editor.model.shutdown(); editor.window?.orderOut(nil) }
+        editor.model.arrowStyle = .tapered
+        let legacy = ImageAnnotation(tool: .arrow, rect: .zero, points: [CGPoint(x: 10, y: 10), CGPoint(x: 90, y: 60)])
+        editor.model.mutate("Add") { $0.annotations.append(legacy) }
+        editor.model.select(legacy.id)
+        XCTAssertEqual(editor.model.arrowStyle, .open)
+    }
+
+    func testStyleChangesReachTextBeingTyped() async throws {
+        let editor = try await openEditor()
+        defer { editor.model.shutdown(); editor.window?.orderOut(nil) }
+        let window = try XCTUnwrap(editor.window)
+        editor.model.tool = .text
+        let canvas = try XCTUnwrap(editor.model.canvas)
+        let point = canvas.convert(CGPoint(x: canvas.bounds.midX, y: canvas.bounds.midY), to: nil)
+        for type in [NSEvent.EventType.leftMouseDown, .leftMouseUp] {
+            window.sendEvent(try XCTUnwrap(NSEvent.mouseEvent(with: type, location: point, modifierFlags: [], timestamp: 0, windowNumber: window.windowNumber,
+                                                              context: nil, eventNumber: 0, clickCount: 1, pressure: 1)))
+        }
+        let typing = try XCTUnwrap(window.firstResponder as? NSTextView)
+        typing.insertText("Hello", replacementRange: NSRange(location: NSNotFound, length: 0))
+        typing.selectAll(nil)
+        editor.model.changeStyle { $0.fontSize = 60; $0.italic = true; $0.bold = false }
+        XCTAssertEqual(typing.font?.pointSize, 60)
+        XCTAssertTrue(typing.font?.fontDescriptor.symbolicTraits.contains(.italic) ?? false)
+        canvas.commitEditing()
+        let text = try XCTUnwrap(editor.model.document?.annotations.first { $0.tool == .text })
+        XCTAssertEqual(text.text, "Hello")
+        XCTAssertEqual(text.fontSize, 60)
+        XCTAssertTrue(text.italic)
+        XCTAssertFalse(text.bold)
+    }
 }

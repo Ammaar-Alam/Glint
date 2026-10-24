@@ -19,6 +19,8 @@ enum Wallpaper {
 
     static var count: Int { palettes.count }
 
+    static func index(of id: UUID) -> Int? { (0..<count).first { Self.id($0) == id } }
+
     static func id(_ index: Int) -> UUID { UUID(uuidString: String(format: "6C1A7E00-0000-4000-8000-%012d", index))! }
 
     static func render(_ index: Int, size: CGSize) -> CGImage? {
