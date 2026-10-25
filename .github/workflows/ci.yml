@@ -27,7 +27,11 @@ jobs:
           xcodebuild -version
           swift --version
       - name: Tests
-        run: swift test
+        timeout-minutes: 8
+        run: |
+          # a stuck test leaves its stack in the log instead of a silent timeout
+          (sleep 360; pid=$(pgrep -n xctest || pgrep -n -f swiftpm-testing-helper); [ -n "$pid" ] && sample "$pid" 3 -mayDie 2>&1 | grep -vE "^\s*$" | head -200) &
+          swift test
         env:
           # print each test as it runs, so a hang shows which test is stuck
           NSUnbufferedIO: "YES"
