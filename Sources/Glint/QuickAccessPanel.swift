@@ -69,6 +69,7 @@ final class QuickAccessPanel: NSPanel {
     private var freshEdits: Set<UUID> = []
     private static let peek: CGFloat = 36
     private var leaving: Set<UUID> = []
+    private var visibleIDs: [UUID] = []
     private var placesRight = false
     var onCommand: ((CaptureCommand, CaptureItem) -> Void)?
 
@@ -288,7 +289,8 @@ final class QuickAccessPanel: NSPanel {
         let visible = screen?.visibleFrame ?? CGRect(x: 0, y: 0, width: 1024, height: 768)
         // up to five that fit the screen, later captures wait their turn until one is cleared
         let shown = Self.cardsThatFit(height: visible.height - Self.endMargin - Self.sideMargin)
-        var views: [(UUID?, NSView)] = shelf.ids.suffix(shown).compactMap { id in captures[id].map { (id, makeCard($0) as NSView) } }
+        visibleIDs = Array(shelf.ids.suffix(shown))
+        var views: [(UUID?, NSView)] = visibleIDs.compactMap { id in captures[id].map { (id, makeCard($0) as NSView) } }
         // newest card sits closest to the screen corner
         if bottom { views.reverse() }
         placesRight = right
@@ -405,8 +407,9 @@ final class QuickAccessPanel: NSPanel {
         RunLoop.main.add(timer, forMode: .common)
     }
 
+    // keys act on the newest card on screen, never on a capture still waiting for room
     override func keyDown(with event: NSEvent) {
-        guard let id = shelf.ids.first, let item = captures[id] else { return }
+        guard let id = visibleIDs.first, let item = captures[id] else { return }
         if event.keyCode == 53 { dismissAll(); return }
         if event.modifierFlags.contains(.command) {
             switch event.charactersIgnoringModifiers {
