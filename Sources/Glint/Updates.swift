@@ -45,6 +45,7 @@ final class UpdateDriver: NSObject, ObservableObject, SPUUserDriver {
         case installing
         case waitingToQuit
         case upToDate
+        case unsupported(String)
         case failed(String)
     }
 
@@ -99,7 +100,6 @@ final class UpdateDriver: NSObject, ObservableObject, SPUUserDriver {
         choice?(.dismiss); choice = nil
         acknowledgement?(); acknowledgement = nil
         cancellation?(); cancellation = nil
-        retryQuit = nil
     }
 
     // MARK: SPUUserDriver
@@ -129,7 +129,14 @@ final class UpdateDriver: NSObject, ObservableObject, SPUUserDriver {
     func showUpdateNotFoundWithError(_ error: any Error, acknowledgement: @escaping () -> Void) {
         cancellation = nil
         self.acknowledgement = acknowledgement
-        present(.upToDate)
+        // a newer release this Mac can't run also lands here, so say that instead of claiming the latest
+        let error = error as NSError
+        switch (error.userInfo[SPUNoUpdateFoundReasonKey] as? NSNumber).flatMap({ SPUNoUpdateFoundReason(rawValue: $0.int32Value) }) {
+        case .systemIsTooOld, .systemIsTooNew, .hardwareDoesNotSupportARM64:
+            present(.unsupported([error.localizedDescription, error.localizedRecoverySuggestion].compactMap { $0 }.joined(separator: " ")))
+        default:
+            present(.upToDate)
+        }
     }
 
     func showUpdaterError(_ error: any Error, acknowledgement: @escaping () -> Void) {
@@ -179,9 +186,9 @@ final class UpdateDriver: NSObject, ObservableObject, SPUUserDriver {
         close()
     }
 
+    // checking again mid update brings back the window, even one closed while waiting to quit
     func showUpdateInFocus() {
-        window?.makeKeyAndOrderFront(nil)
-        NSApp.activate(ignoringOtherApps: true)
+        present(phase)
     }
 
     func dismissUpdateInstallation() {
@@ -256,7 +263,7 @@ private struct UpdateView: View {
                 Image(nsImage: NSApp.applicationIconImage).resizable().frame(width: 52, height: 52)
                 VStack(alignment: .leading, spacing: 3) {
                     Text(title).font(.system(size: 16, weight: .semibold)).foregroundStyle(Color(white: 0.1))
-                    Text(subtitle).font(.system(size: 12)).foregroundStyle(Color(white: 0.45))
+                    Text(subtitle).font(.system(size: 12)).foregroundStyle(Color(white: 0.45)).fixedSize(horizontal: false, vertical: true)
                 }
                 Spacer(minLength: 0)
             }
@@ -286,6 +293,7 @@ private struct UpdateView: View {
         case .downloading: return "Downloading Update"
         case .installing: return "Installing Update"
         case .waitingToQuit: return "Ready to Install"
+        case .unsupported: return "Update not available"
         case .upToDate: return "You're up to date"
         case .failed: return "Couldn't check for updates"
         }
@@ -295,7 +303,7 @@ private struct UpdateView: View {
         switch driver.phase {
         case .available: return "You have \(Updates.currentVersion)"
         case .upToDate: return "Glint \(Updates.currentVersion) is the latest version."
-        case .failed(let message): return message
+        case .failed(let message), .unsupported(let message): return message
         case .installing: return "Glint will reopen in a moment."
         case .waitingToQuit: return "Glint will update the next time it quits."
         default: return "Glint \(Updates.currentVersion)"
@@ -346,7 +354,7 @@ private struct UpdateView: View {
             EmptyView()
         case .waitingToQuit:
             Button("Relaunch", action: driver.relaunch).buttonStyle(PrimaryButtonStyle()).keyboardShortcut(.defaultAction)
-        case .upToDate, .failed:
+        case .upToDate, .failed, .unsupported:
             Button("OK", action: driver.done).buttonStyle(PrimaryButtonStyle()).keyboardShortcut(.defaultAction)
         }
     }
