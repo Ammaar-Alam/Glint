@@ -10,6 +10,8 @@ enum Updates {
     static let updater: SPUUpdater = {
         let updater = SPUUpdater(hostBundle: .main, applicationBundle: .main, userDriver: driver, delegate: nil)
         do { try updater.start() } catch { NSLog("Updates could not start: %@", error.localizedDescription) }
+        // settings no longer offer turning checks off, so an old saved opt-out would strand that copy
+        updater.automaticallyChecksForUpdates = true
         return updater
     }()
 
@@ -41,6 +43,7 @@ final class UpdateDriver: NSObject, ObservableObject, SPUUserDriver {
         case available(version: String)
         case downloading(progress: Double?)
         case installing
+        case waitingToQuit
         case upToDate
         case failed(String)
     }
@@ -51,6 +54,7 @@ final class UpdateDriver: NSObject, ObservableObject, SPUUserDriver {
     private var choice: ((SPUUserUpdateChoice) -> Void)?
     private var acknowledgement: (() -> Void)?
     private var cancellation: (() -> Void)?
+    private var retryQuit: (() -> Void)?
     private var expectedLength: UInt64 = 0
     private var receivedLength: UInt64 = 0
 
@@ -79,6 +83,10 @@ final class UpdateDriver: NSObject, ObservableObject, SPUUserDriver {
         close()
     }
 
+    func relaunch() {
+        retryQuit?()
+    }
+
     func cancel() {
         cancellation?()
         cancellation = nil
@@ -91,6 +99,7 @@ final class UpdateDriver: NSObject, ObservableObject, SPUUserDriver {
         choice?(.dismiss); choice = nil
         acknowledgement?(); acknowledgement = nil
         cancellation?(); cancellation = nil
+        retryQuit = nil
     }
 
     // MARK: SPUUserDriver
@@ -146,9 +155,10 @@ final class UpdateDriver: NSObject, ObservableObject, SPUUserDriver {
         phase = .downloading(progress: min(1, Double(receivedLength) / Double(expectedLength)))
     }
 
+    // past this point Sparkle can no longer cancel, so the window drops its Cancel button
     func showDownloadDidStartExtractingUpdate() {
         cancellation = nil
-        phase = .downloading(progress: 1)
+        phase = .installing
     }
 
     func showExtractionReceivedProgress(_ progress: Double) {}
@@ -158,8 +168,10 @@ final class UpdateDriver: NSObject, ObservableObject, SPUUserDriver {
         reply(.install)
     }
 
+    // Glint can refuse to quit mid capture or export, so the window offers to try again
     func showInstallingUpdate(withApplicationTerminated applicationTerminated: Bool, retryTerminatingApplication: @escaping () -> Void) {
-        phase = .installing
+        retryQuit = applicationTerminated ? nil : retryTerminatingApplication
+        present(applicationTerminated ? .installing : .waitingToQuit)
     }
 
     func showUpdateInstalledAndRelaunched(_ relaunched: Bool, acknowledgement: @escaping () -> Void) {
@@ -176,6 +188,7 @@ final class UpdateDriver: NSObject, ObservableObject, SPUUserDriver {
         choice = nil
         acknowledgement = nil
         cancellation = nil
+        retryQuit = nil
         close()
     }
 
@@ -272,6 +285,7 @@ private struct UpdateView: View {
         case .available(let version): return "Glint \(version) is available"
         case .downloading: return "Downloading Update"
         case .installing: return "Installing Update"
+        case .waitingToQuit: return "Ready to Install"
         case .upToDate: return "You're up to date"
         case .failed: return "Couldn't check for updates"
         }
@@ -283,6 +297,7 @@ private struct UpdateView: View {
         case .upToDate: return "Glint \(Updates.currentVersion) is the latest version."
         case .failed(let message): return message
         case .installing: return "Glint will reopen in a moment."
+        case .waitingToQuit: return "Glint will update the next time it quits."
         default: return "Glint \(Updates.currentVersion)"
         }
     }
@@ -329,6 +344,8 @@ private struct UpdateView: View {
             Button("Cancel", action: driver.cancel).buttonStyle(SecondaryButtonStyle())
         case .installing:
             EmptyView()
+        case .waitingToQuit:
+            Button("Relaunch", action: driver.relaunch).buttonStyle(PrimaryButtonStyle()).keyboardShortcut(.defaultAction)
         case .upToDate, .failed:
             Button("OK", action: driver.done).buttonStyle(PrimaryButtonStyle()).keyboardShortcut(.defaultAction)
         }
