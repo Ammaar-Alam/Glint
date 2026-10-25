@@ -46,6 +46,15 @@ final class ImageEditorTests: XCTestCase {
         XCTAssertEqual(model.shownRedactStrength, 7)
     }
 
+    func testPixelBlocksNeverShrinkFromTheOldSize() {
+        // old blocks were max(3, width * 3 * scale), new ones must be at least that at every output scale
+        for width in [0.5, 1, 2, 5, 10, 20, 40] as [Double] {
+            for scale in [0.25, 0.5, 1, 2, 3] as [Double] {
+                XCTAssertGreaterThanOrEqual(ImageRenderer.pixelBlock(width: width, scale: scale), max(3, width * 3 * scale), "width \(width) scale \(scale)")
+            }
+        }
+    }
+
     func testAnnotationStyleKeepsTheStoredFormat() throws {
         var mark = ImageAnnotation(tool: .arrow, rect: .zero)
         mark.style = AnnotationStyle(color: .white, lineWidth: 12, fontSize: 60, filled: true, bold: false, italic: true, arrowStyle: .solid)
