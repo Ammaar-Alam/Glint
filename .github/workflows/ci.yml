@@ -28,5 +28,8 @@ jobs:
           swift --version
       - name: Tests
         run: swift test
+        env:
+          # print each test as it runs, so a hang shows which test is stuck
+          NSUnbufferedIO: "YES"
       - name: App bundle
         run: scripts/build-app.sh

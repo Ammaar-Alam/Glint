@@ -215,6 +215,9 @@ enum ImageRenderer {
         }
     }
 
+    // blocks only ever grow from the old 3 per step and 3 pixel floor, so a saved redaction never gets easier to read
+    static func pixelBlock(width: Double, scale: Double) -> Double { max(3, max(6, width * 4) * scale) }
+
     // the one text face, so typing in place looks like the rendered result
     static func textFont(size: CGFloat, bold: Bool, italic: Bool) -> CTFont {
         let font = CTFontCreateWithName("Helvetica" as CFString, size, nil)
@@ -261,7 +264,7 @@ enum ImageRenderer {
         let result: CIImage
         if item.tool == .pixelate {
             result = input.applyingFilter("CIPixellate", parameters: [
-                kCIInputScaleKey: max(3, item.lineWidth * 3 * scale),
+                kCIInputScaleKey: pixelBlock(width: item.lineWidth, scale: scale),
                 kCIInputCenterKey: CIVector(x: 0, y: 0)
             ]).cropped(to: input.extent)
         } else {
