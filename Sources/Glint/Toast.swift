@@ -7,10 +7,10 @@ enum Toast {
     private static var panel: NSPanel?
     private static var hideTask: Task<Void, Never>?
 
-    static func show(_ text: String, symbol: String = "checkmark.circle.fill") {
+    static func show(_ title: String, detail: String? = nil) {
         let panel = panel ?? makePanel()
         self.panel = panel
-        let host = NSHostingView(rootView: ToastView(text: text, symbol: symbol))
+        let host = NSHostingView(rootView: ToastView(title: title, detail: detail))
         host.setFrameSize(host.fittingSize)
         panel.contentView = host
         let screen = NSScreen.screens.first { $0.frame.contains(NSEvent.mouseLocation) } ?? NSScreen.main
@@ -51,20 +51,56 @@ enum Toast {
     }
 }
 
+// a white pill with a check that draws itself and one glint passing over, outcome first and place second
 private struct ToastView: View {
-    let text: String
-    let symbol: String
+    let title: String
+    let detail: String?
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var shown = false
+    @State private var sheen = false
 
     var body: some View {
         HStack(spacing: 8) {
-            Image(systemName: symbol).font(.system(size: 14, weight: .semibold)).foregroundStyle(Color.glint)
-            Text(text).font(.system(size: 13, weight: .semibold))
+            ZStack {
+                Circle().fill(Color.glint)
+                Image(systemName: "checkmark")
+                    .font(.system(size: 9, weight: .heavy))
+                    .foregroundStyle(.white)
+                    .symbolEffect(.drawOn, isActive: !shown)
+            }
+            .frame(width: 18, height: 18)
+            .scaleEffect(shown ? 1 : 0.6)
+            HStack(spacing: 5) {
+                Text(title).font(.system(size: 13, weight: .semibold)).foregroundStyle(Color(white: 0.12))
+                if let detail { Text("·  \(detail)").font(.system(size: 13)).foregroundStyle(Color(white: 0.45)) }
+            }
         }
-        .padding(.horizontal, 16)
-        .frame(height: 36)
-        .background(.regularMaterial, in: Capsule())
-        .overlay(Capsule().strokeBorder(Color.primary.opacity(0.08)))
-        .shadow(color: .black.opacity(0.15), radius: 10, y: 3)
-        .padding(12)
+        .padding(.leading, 9)
+        .padding(.trailing, 15)
+        .frame(height: 34)
+        .background {
+            Capsule()
+                .fill(Color.white)
+                .shadow(color: .black.opacity(0.14), radius: 12, y: 4)
+        }
+        .overlay {
+            // one soft streak in the accent passes over the pill
+            GeometryReader { proxy in
+                LinearGradient(colors: [.clear, Color.glint.opacity(0.16), .clear], startPoint: .leading, endPoint: .trailing)
+                    .frame(width: 44)
+                    .rotationEffect(.degrees(18))
+                    .offset(x: sheen ? proxy.size.width + 44 : -88)
+            }
+            .clipShape(Capsule())
+            .allowsHitTesting(false)
+        }
+        .overlay(Capsule().strokeBorder(Color.black.opacity(0.07)))
+        .padding(14)
+        .accessibilityElement(children: .combine)
+        .onAppear {
+            guard !reduceMotion else { shown = true; return }
+            withAnimation(.easeOut(duration: 0.22)) { shown = true }
+            withAnimation(.easeInOut(duration: 0.7).delay(0.12)) { sheen = true }
+        }
     }
 }

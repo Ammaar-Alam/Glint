@@ -434,7 +434,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                     if let format { _ = try CaptureFolder.saveImage(source, named: item.title, format: format, in: folder) }
                     else { _ = try CaptureFolder.saveFile(source, named: item.title, in: folder) }
                 }.value
-                Toast.show("Saved to \(FileManager.default.displayName(atPath: folder.path))", symbol: "arrow.down.circle.fill")
+                Toast.show("Saved", detail: FileManager.default.displayName(atPath: folder.path))
             } catch { showError(error) }
         }
     }
