@@ -128,12 +128,12 @@ final class SettingsTests: XCTestCase {
 
     @MainActor
     func testPopupScaleChangesHowManyCardsFit() {
-        XCTAssertEqual(QuickAccessPanel.cardsThatFit(height: 1000, footer: true, scale: 1), 4)
-        XCTAssertEqual(QuickAccessPanel.cardsThatFit(height: 1000, footer: true, scale: 1.5), 4)
-        XCTAssertEqual(QuickAccessPanel.cardsThatFit(height: 600, footer: true, scale: 1.5), 2)
-        XCTAssertEqual(QuickAccessPanel.cardsThatFit(height: 600, footer: true, scale: 0.75), 4)
-        // 14 * 2 inset, two 183 point cards and the footer stay inside 600 points
-        XCTAssertLessThanOrEqual(14 * 2 + 2 * 183 + 10 + 24 + 10, 600)
+        XCTAssertEqual(QuickAccessPanel.cardsThatFit(height: 1000, scale: 1), 5)
+        XCTAssertEqual(QuickAccessPanel.cardsThatFit(height: 1000, scale: 1.5), 5)
+        XCTAssertEqual(QuickAccessPanel.cardsThatFit(height: 600, scale: 1.5), 3)
+        XCTAssertEqual(QuickAccessPanel.cardsThatFit(height: 600, scale: 0.75), 5)
+        // 14 * 2 inset and three 183 point cards with their gaps stay inside 600 points
+        XCTAssertLessThanOrEqual(14 * 2 + 3 * 183 + 2 * 10, 600)
     }
 
     func testFolderDestinationsAreReservedUntilWritten() throws {

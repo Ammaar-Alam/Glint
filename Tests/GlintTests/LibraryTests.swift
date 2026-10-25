@@ -209,10 +209,10 @@ final class LibraryTests: XCTestCase {
 
     @MainActor
     func testQuickAccessFitsShortScreens() {
-        XCTAssertEqual(QuickAccessPanel.cardsThatFit(height: 1000, footer: true), 4)
-        XCTAssertEqual(QuickAccessPanel.cardsThatFit(height: 500, footer: true), 3)
-        XCTAssertEqual(QuickAccessPanel.cardsThatFit(height: 100, footer: false), 1)
-        let three = 14 * 2 + 3 * 122 + 2 * 10 + 22 + 10
+        XCTAssertEqual(QuickAccessPanel.cardsThatFit(height: 1000), 5)
+        XCTAssertEqual(QuickAccessPanel.cardsThatFit(height: 500), 3)
+        XCTAssertEqual(QuickAccessPanel.cardsThatFit(height: 100), 1)
+        let three = 14 * 2 + 3 * 122 + 2 * 10
         XCTAssertLessThanOrEqual(three, 500)
     }
 }
