@@ -1,0 +1,48 @@
+name: Publish updates
+
+# rebuilds the update feed from every published release, so publishing a release is what ships it to installed copies
+on:
+  release:
+    types: [published, edited, deleted]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  feed:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    steps:
+      - name: Build the feed
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+        run: |
+          mkdir site
+          {
+            echo '<?xml version="1.0" encoding="utf-8"?>'
+            echo '<rss version="2.0" xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle">'
+            echo '  <channel>'
+            echo '    <title>Glint</title>'
+            # newest first, each release carries its own signed entry as appcast-item.xml
+            gh release list -R "$REPO" --exclude-drafts --limit 100 --json tagName -q '.[].tagName' | while read -r tag; do
+              gh release download "$tag" -R "$REPO" -p appcast-item.xml -O - 2>/dev/null || true
+            done
+            echo '  </channel>'
+            echo '</rss>'
+          } > site/appcast.xml
+          python3 -c 'import xml.etree.ElementTree as t; print(len(t.parse("site/appcast.xml").findall("channel/item")), "versions in the feed")'
+      - uses: actions/upload-pages-artifact@v5.0.0
+        with:
+          path: site
+      - id: deploy
+        uses: actions/deploy-pages@v5.0.1
