@@ -27,20 +27,34 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
         run: |
+          set -euo pipefail
           mkdir site
+          # until a stable release exists every release is a pre-release and ships to everyone, after that betas stay out
+          stable="$(gh release list -R "$REPO" --exclude-drafts --exclude-pre-releases --limit 1 --json tagName -q length)"
+          flags=(--exclude-drafts)
+          if [ "$stable" -gt 0 ]; then flags+=(--exclude-pre-releases); fi
+          tags="$(gh release list -R "$REPO" "${flags[@]}" --limit 100 --json tagName -q '.[].tagName')"
+          expected=0
           {
             echo '<?xml version="1.0" encoding="utf-8"?>'
             echo '<rss version="2.0" xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle">'
             echo '  <channel>'
             echo '    <title>Glint</title>'
-            # newest first, each release carries its own signed entry as appcast-item.xml
-            gh release list -R "$REPO" --exclude-drafts --limit 100 --json tagName -q '.[].tagName' | while read -r tag; do
-              gh release download "$tag" -R "$REPO" -p appcast-item.xml -O - 2>/dev/null || true
+            # newest first, releases from before in-app updates have no entry and are skipped, a failed download stops the run
+            for tag in $tags; do
+              assets="$(gh release view "$tag" -R "$REPO" --json assets -q '.assets[].name')"
+              if grep -qx 'appcast-item.xml' <<< "$assets"; then
+                gh release download "$tag" -R "$REPO" -p appcast-item.xml -O -
+                expected=$((expected + 1))
+              fi
             done
             echo '  </channel>'
             echo '</rss>'
           } > site/appcast.xml
-          python3 -c 'import xml.etree.ElementTree as t; print(len(t.parse("site/appcast.xml").findall("channel/item")), "versions in the feed")'
+          # a feed missing a version would hide updates, so only a complete one is deployed
+          count="$(python3 -c 'import xml.etree.ElementTree as t; print(len(t.parse("site/appcast.xml").findall("channel/item")))')"
+          echo "$count versions in the feed"
+          if [ "$count" -ne "$expected" ] || [ "$count" -eq 0 ]; then echo "expected $expected versions" >&2; exit 1; fi
       - uses: actions/upload-pages-artifact@v5.0.0
         with:
           path: site
