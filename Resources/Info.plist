@@ -12,7 +12,7 @@
     <key>NSHumanReadableCopyright</key><string>Copyright © 2026 Ammaar Alam and contributors</string>
     <key>LSMinimumSystemVersion</key><string>26.0</string>
     <key>LSUIElement</key><true/>
-    <key>SUFeedURL</key><string>https://raw.githubusercontent.com/Ammaar-Alam/Glint/main/appcast.xml</string>
+    <key>SUFeedURL</key><string>https://ammaar-alam.github.io/Glint/appcast.xml</string>
     <key>SUPublicEDKey</key><string>eb04iL/KyOyy49tzkfcuszCJ/ctkkC0XX8Yua3xJQM8=</string>
     <key>SUEnableAutomaticChecks</key><true/>
     <key>NSPrincipalClass</key><string>NSApplication</string>
