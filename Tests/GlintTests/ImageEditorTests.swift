@@ -458,8 +458,9 @@ final class ImageEditorTests: XCTestCase {
             for url in [sourceURL, ownedURL, externalURL, failedURL] { try? FileManager.default.removeItem(at: url) }
         }
         for url in [sourceURL, ownedURL, externalURL] { try ImageFile.write(fixture(width: 20, height: 12), to: url) }
-        let large = try XCTUnwrap(ImageRenderer.bitmap(size: CGSize(width: 100_000, height: 1), scale: 1).makeImage())
-        try ImageFile.write(large, to: failedURL)
+        // an unreadable file fails the insert the same way without asking the encoder for an extreme image,
+        // which can stall on some macOS 26 machines
+        try Data("not an image".utf8).write(to: failedURL)
         let model = ImageEditorModel(url: sourceURL, onExport: { _ in })
         defer { model.shutdown() }
         for _ in 0..<100 where model.document == nil { try await Task.sleep(for: .milliseconds(20)) }
