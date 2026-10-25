@@ -261,7 +261,8 @@ enum ImageRenderer {
         let result: CIImage
         if item.tool == .pixelate {
             result = input.applyingFilter("CIPixellate", parameters: [
-                kCIInputScaleKey: max(3, item.lineWidth * 3 * scale),
+                // blocks only ever grow from the old 3 per step, so a saved redaction never gets easier to read
+                kCIInputScaleKey: max(6, item.lineWidth * 4) * scale,
                 kCIInputCenterKey: CIVector(x: 0, y: 0)
             ]).cropped(to: input.extent)
         } else {

@@ -16,6 +16,36 @@ final class ImageEditorTests: XCTestCase {
         return model
     }
 
+    @MainActor
+    func testRedactionStrengthIsSeparateFromThickness() async throws {
+        let model = try await editingModel()
+        defer { model.shutdown(); UserDefaults.standard.removeObject(forKey: "redactStrength") }
+        model.setStyle { $0.lineWidth = 12 }
+        model.undoManager.beginUndoGrouping()
+        model.setRedactStrength(2)
+        model.undoManager.endUndoGrouping()
+        let blur = model.newAnnotation(tool: .blur, at: .zero)
+        let arrow = model.newAnnotation(tool: .arrow, at: .zero)
+        XCTAssertEqual(blur.lineWidth, 2)
+        XCTAssertEqual(arrow.lineWidth, 12)
+
+        // changing strength restyles selected redactions only
+        var pixels = model.newAnnotation(tool: .pixelate, at: .zero)
+        pixels.rect = CGRect(x: 1, y: 1, width: 5, height: 5)
+        var line = arrow
+        line.points = [.zero, CGPoint(x: 4, y: 4)]
+        model.undoManager.beginUndoGrouping()
+        model.mutate("Add") { $0.annotations += [pixels, line] }
+        model.undoManager.endUndoGrouping()
+        model.selectedIDs = [pixels.id, line.id]
+        model.undoManager.beginUndoGrouping()
+        model.setRedactStrength(7)
+        model.undoManager.endUndoGrouping()
+        XCTAssertEqual(model.document?.annotations.first { $0.id == pixels.id }?.lineWidth, 7)
+        XCTAssertEqual(model.document?.annotations.first { $0.id == line.id }?.lineWidth, 12)
+        XCTAssertEqual(model.shownRedactStrength, 7)
+    }
+
     func testAnnotationStyleKeepsTheStoredFormat() throws {
         var mark = ImageAnnotation(tool: .arrow, rect: .zero)
         mark.style = AnnotationStyle(color: .white, lineWidth: 12, fontSize: 60, filled: true, bold: false, italic: true, arrowStyle: .solid)
