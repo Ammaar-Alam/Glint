@@ -100,7 +100,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             }
         }
         shelf.onCommand = { [weak self] in self?.perform($0, on: $1) }
-        shelf.onHistory = { [weak self] in self?.showHistory() }
         recorder.onFailure = { [weak self] error in
             guard let self else { return }
             self.recordingPanel?.orderOut(nil)
