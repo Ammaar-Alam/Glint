@@ -118,7 +118,8 @@ final class UpdateDriver: NSObject, ObservableObject, SPUUserDriver {
         choice = reply
         notes = []
         let version = appcastItem.displayVersionString
-        present(.available(version: version))
+        // a scheduled check never steals focus from whatever the person is doing
+        present(.available(version: version), focus: state.userInitiated)
         Task { await loadNotes(for: version) }
     }
 
@@ -201,13 +202,14 @@ final class UpdateDriver: NSObject, ObservableObject, SPUUserDriver {
 
     // MARK: window
 
-    private func present(_ next: Phase) {
+    private func present(_ next: Phase, focus: Bool = true) {
         phase = next
         if window == nil {
             let window = UpdateWindow(driver: self)
             self.window = window
             window.center()
         }
+        guard focus else { window?.orderFront(nil); return }
         window?.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
     }
