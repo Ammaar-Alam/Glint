@@ -245,9 +245,8 @@ private struct GeneralPane: View {
     @AppStorage("filenameTemplate") private var filename = "Glint {date} at {time}"
     @AppStorage("retentionDays") private var retention = 0
     @State private var login = SMAppService.mainApp.status == .enabled
-    // the updater is not observable, so the switches keep their own state and push changes to it
-    @State private var checksForUpdates = Updates.controller.updater.automaticallyChecksForUpdates
-    @State private var installsUpdates = Updates.controller.updater.automaticallyDownloadsUpdates
+    // the updater is not observable, so the switch keeps its own state and pushes changes to it
+    @State private var installsUpdates = Updates.updater.automaticallyDownloadsUpdates
     @State private var error: String?
 
     private static let desktop = FileManager.default.urls(for: .desktopDirectory, in: .userDomainMask)[0].path
@@ -264,10 +263,11 @@ private struct GeneralPane: View {
                 }
             ToggleRow("Show menu bar icon", caption: showMenuBarIcon ? nil : "Open Glint again to get back here.", isOn: $showMenuBarIcon)
             ToggleRow("Play sounds", isOn: $sound)
-            ToggleRow("Check for updates", isOn: $checksForUpdates)
-                .onChange(of: checksForUpdates) { _, value in Updates.controller.updater.automaticallyChecksForUpdates = value }
+            SettingsRow("Glint \(Updates.currentVersion)") {
+                Button("Check for Updates", action: Updates.check).buttonStyle(SecondaryButtonStyle())
+            }
             ToggleRow("Install updates automatically", isOn: $installsUpdates)
-                .onChange(of: installsUpdates) { _, value in Updates.controller.updater.automaticallyDownloadsUpdates = value }
+                .onChange(of: installsUpdates) { _, value in Updates.updater.automaticallyDownloadsUpdates = value }
         }
         SettingsGroup(title: "Files") {
             SettingsRow("Save to") {
@@ -756,7 +756,7 @@ private struct ShortcutsPane: View {
 }
 
 private struct AboutPane: View {
-    private var version: String { Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "" }
+    private var version: String { Updates.currentVersion }
 
     var body: some View {
         VStack(spacing: 6) {
