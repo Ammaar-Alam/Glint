@@ -71,7 +71,6 @@ final class QuickAccessPanel: NSPanel {
     private var leaving: Set<UUID> = []
     private var placesRight = false
     var onCommand: ((CaptureCommand, CaptureItem) -> Void)?
-    var onHistory: (() -> Void)?
 
     init(library: CaptureLibrary) {
         self.library = library
@@ -91,7 +90,8 @@ final class QuickAccessPanel: NSPanel {
     }
 
     func present(_ item: CaptureItem, replacing old: UUID? = nil) {
-        let deferred = isCaptureSuppressed || (isVisible && (frame.contains(NSEvent.mouseLocation) || isDraggingCapture || NSEvent.pressedMouseButtons != 0))
+        // a card in the middle of a drag must not move, otherwise new captures join the stack right away
+        let deferred = isCaptureSuppressed || (isVisible && (isDraggingCapture || NSEvent.pressedMouseButtons != 0))
         captures[item.id] = item
         if let old {
             shelf.replace(old, with: item.id, deferred: deferred)
@@ -138,8 +138,7 @@ final class QuickAccessPanel: NSPanel {
         guard pendingTimer == nil else { return }
         let timer = Timer(timeInterval: 0.15, repeats: true) { [weak self] _ in
             MainActor.assumeIsolated {
-                guard let self, !self.isCaptureSuppressed, !self.isDraggingCapture, NSEvent.pressedMouseButtons == 0,
-                      !self.isVisible || !self.frame.contains(NSEvent.mouseLocation) else { return }
+                guard let self, !self.isCaptureSuppressed, !self.isDraggingCapture, NSEvent.pressedMouseButtons == 0 else { return }
                 self.pendingTimer?.invalidate()
                 self.pendingTimer = nil
                 for id in self.shelf.takePending() { if let item = self.captures[id] { self.present(item) } }
@@ -268,10 +267,9 @@ final class QuickAccessPanel: NSPanel {
     private static var sideMargin: CGFloat { (cardSize.height * 0.35 - inset).rounded() }
     private static var endMargin: CGFloat { (cardSize.height * 0.85 - inset).rounded() }
 
-    static func cardsThatFit(height: CGFloat, footer: Bool, scale: CGFloat = cardScale) -> Int {
-        let footerHeight = footer ? HUDButton.compactHeight + gap : 0
-        let fitting = Int((height - inset * 2 - footerHeight + gap) / ((baseCardSize.height * scale).rounded() + gap))
-        return max(1, min(4, fitting))
+    static func cardsThatFit(height: CGFloat, scale: CGFloat = cardScale) -> Int {
+        let fitting = Int((height - inset * 2 + gap) / ((baseCardSize.height * scale).rounded() + gap))
+        return max(1, min(5, fitting))
     }
 
     private func rebuild() {
@@ -288,10 +286,9 @@ final class QuickAccessPanel: NSPanel {
         let preferred = UserDefaults.standard.bool(forKey: "shelfFollowsPointer") ? pointer : NSScreen.screens.first
         let screen = (isVisible ? self.screen : nil) ?? preferred ?? NSScreen.main ?? NSScreen.screens.first
         let visible = screen?.visibleFrame ?? CGRect(x: 0, y: 0, width: 1024, height: 768)
-        // show only as many cards as the screen fits, the footer opens the rest in history
-        let shown = Self.cardsThatFit(height: visible.height - Self.endMargin - Self.sideMargin, footer: shelf.ids.count > 1)
-        var views: [(UUID?, NSView)] = shelf.ids.prefix(shown).compactMap { id in captures[id].map { (id, makeCard($0) as NSView) } }
-        if shelf.ids.count > 1 { views.append((nil, makeFooter(shown: shown))) }
+        // up to five that fit the screen, later captures wait their turn until one is cleared
+        let shown = Self.cardsThatFit(height: visible.height - Self.endMargin - Self.sideMargin)
+        var views: [(UUID?, NSView)] = shelf.ids.suffix(shown).compactMap { id in captures[id].map { (id, makeCard($0) as NSView) } }
         // newest card sits closest to the screen corner
         if bottom { views.reverse() }
         placesRight = right
@@ -314,7 +311,15 @@ final class QuickAccessPanel: NSPanel {
         contentView = container
         let x = right ? visible.maxX - width : visible.minX
         let originY = bottom ? visible.minY + Self.endMargin : visible.maxY - min(height, visible.height) - Self.sideMargin
-        setFrame(CGRect(x: x, y: originY, width: width, height: min(height, visible.height)), display: true)
+        let target = CGRect(x: x, y: originY, width: width, height: min(height, visible.height))
+        // animating from wherever the panel is replaces a running entrance, which would otherwise finish at the old size and clip the new card
+        if isVisible {
+            NSAnimationContext.runAnimationGroup { context in
+                context.duration = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion ? 0 : 0.2
+                context.timingFunction = CAMediaTimingFunction(controlPoints: 0.2, 0.9, 0.3, 1)
+                animator().setFrame(target, display: true)
+            }
+        } else { setFrame(target, display: true) }
     }
 
     private func show() {
@@ -375,17 +380,6 @@ final class QuickAccessPanel: NSPanel {
             card.setCorner(.bottomLeft, HUDButton(symbol: "pin.fill", help: "Pin", tilt: -35) { run(.pin) })
         }
         return card
-    }
-
-    private func makeFooter(shown: Int) -> NSView {
-        let count = shelf.ids.count
-        let row = NSStackView(views: [
-            HUDButton(title: count > shown ? "Show All \(count)" : "History", compact: true) { [weak self] in self?.onHistory?() },
-            HUDButton(title: "Close All", compact: true) { [weak self] in self?.dismissAll() }
-        ])
-        row.spacing = 6
-        row.setFrameSize(row.fittingSize)
-        return row
     }
 
     private func interact(_ action: () -> Void) {
@@ -565,13 +559,12 @@ final class PassthroughView: NSView {
 @MainActor
 final class HUDButton: NSButton {
     enum Style { case primary, light }
-    static let compactHeight: CGFloat = 24
     private let handler: () -> Void
     private let style: Style
     private var hovered = false { didSet { updateFill() } }
 
     // solid fills so buttons read over any capture, dark or light
-    init(title: String = "", symbol: String? = nil, help: String? = nil, tilt: CGFloat = 0, style: Style = .light, compact: Bool = false, action: @escaping () -> Void) {
+    init(title: String = "", symbol: String? = nil, help: String? = nil, tilt: CGFloat = 0, style: Style = .light, action: @escaping () -> Void) {
         handler = action
         self.style = style
         super.init(frame: .zero)
@@ -600,7 +593,7 @@ final class HUDButton: NSButton {
         } else {
             let font = NSFont.systemFont(ofSize: 12, weight: .semibold)
             attributedTitle = NSAttributedString(string: title, attributes: [.font: font, .foregroundColor: ink])
-            setFrameSize(NSSize(width: ceil(attributedTitle.size().width) + (compact ? 22 : 30), height: compact ? Self.compactHeight : 27))
+            setFrameSize(NSSize(width: ceil(attributedTitle.size().width) + 30, height: 27))
         }
         layer?.cornerRadius = frame.height / 2
         layer?.cornerCurve = .continuous
