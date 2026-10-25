@@ -581,13 +581,13 @@ private struct ToolOptionsBar: View {
             }
             switch key {
             case .arrow, .pen:
-                slider(symbol: "lineweight", help: "Thickness", in: 1...40)
+                thickness()
             case .rectangle:
-                slider(symbol: "lineweight", help: "Thickness", in: 1...40)
+                thickness()
                 Button { setFilled(!model.style.filled) } label: { Image(systemName: model.style.filled ? "square.fill" : "square") }
                     .buttonStyle(ToolButtonStyle(selected: model.style.filled)).help("Fill")
             case .pixelate:
-                if !active.contains(.redact) { slider(symbol: "aqi.medium", help: "Strength", in: 2...40) }
+                if !active.contains(.redact) { strength() }
             case .text:
                 stepper
                 BarDivider()
@@ -654,18 +654,28 @@ private struct ToolOptionsBar: View {
         }
     }
 
-    private func slider(symbol: String, help: String, in range: ClosedRange<Double>) -> some View {
+    private func slider(symbol: String, help: String, value: Double, in range: ClosedRange<Double>, step: Double, label: String, set: @escaping (Double) -> Void) -> some View {
         HStack(spacing: 8) {
             Image(systemName: symbol).font(.system(size: 12, weight: .medium)).foregroundStyle(.secondary)
-            Slider(value: Binding(get: { min(range.upperBound, max(range.lowerBound, model.style.lineWidth)) }, set: { setLineWidth($0.rounded()) }), in: range) { editing in
+            Slider(value: Binding(get: { min(range.upperBound, max(range.lowerBound, value)) }, set: { set(($0 / step).rounded() * step) }), in: range) { editing in
                 if editing { model.beginAdjusting() } else { model.endAdjusting() }
             }
             .controlSize(.small)
             .frame(width: 110)
-            Text("\(Int(model.style.lineWidth))").font(.system(size: 12, weight: .medium).monospacedDigit()).foregroundStyle(.secondary).frame(width: 20, alignment: .trailing)
+            Text(label).font(.system(size: 12, weight: .medium).monospacedDigit()).foregroundStyle(.secondary).frame(width: 20, alignment: .trailing)
         }
         .padding(.horizontal, 8)
         .help(help)
+    }
+
+    private func thickness() -> some View {
+        slider(symbol: "lineweight", help: "Thickness", value: model.style.lineWidth, in: 1...40, step: 1, label: "\(Int(model.style.lineWidth))", set: setLineWidth)
+    }
+
+    // shown as 1 to 20, light enough at the bottom to soften, strong enough at the top to hide anything
+    private func strength() -> some View {
+        let value = model.shownRedactStrength
+        return slider(symbol: "aqi.medium", help: "Strength", value: value, in: 0.5...10, step: 0.5, label: "\(Int((value * 2).rounded()))") { model.setRedactStrength($0) }
     }
 
     private var stepper: some View {

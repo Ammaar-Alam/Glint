@@ -27,6 +27,11 @@ final class ImageEditorModel: ObservableObject {
                                                           arrowStyle: UserDefaults.standard.string(forKey: "arrowStyle").flatMap(ArrowStyle.init(rawValue:)) ?? .tapered)
     @Published private(set) var editingTextID: UUID?
     var style: AnnotationStyle { selectedAnnotations.last?.style ?? toolStyle }
+    // redaction keeps its own strength so it never inherits a pen's thickness, the blur radius is twice this
+    @Published private(set) var redactStrength = UserDefaults.standard.object(forKey: "redactStrength") as? Double ?? 3
+    var shownRedactStrength: Double {
+        selectedAnnotations.last { [.blur, .pixelate].contains($0.tool) }?.lineWidth ?? redactStrength
+    }
     @Published var busy = false
     @Published var status = "Opening image…"
     @Published var errorMessage: String?
@@ -360,6 +365,7 @@ final class ImageEditorModel: ObservableObject {
         var annotation = ImageAnnotation(tool: tool, rect: CGRect(origin: point, size: .zero))
         annotation.style = toolStyle
         if tool == .redact { annotation.color = .ink }
+        if tool == .blur || tool == .pixelate { annotation.lineWidth = redactStrength }
         annotation.number = (document?.annotations.filter { $0.tool == .counter }.map(\.number).max() ?? 0) + 1
         return annotation
     }
@@ -370,6 +376,17 @@ final class ImageEditorModel: ObservableObject {
                 if selectedIDs.contains(id) { selectedIDs.remove(id) } else { selectedIDs.insert(id) }
             } else { selectedIDs = [id] }
         } else if !extending { selectedIDs = [] }
+    }
+
+    func setRedactStrength(_ value: Double) {
+        redactStrength = value
+        UserDefaults.standard.set(value, forKey: "redactStrength")
+        mutate("Change Strength") { document in
+            for index in document.annotations.indices
+            where selectedIDs.contains(document.annotations[index].id) && [.blur, .pixelate].contains(document.annotations[index].tool) {
+                document.annotations[index].lineWidth = value
+            }
+        }
     }
 
     func setStyle(_ update: (inout AnnotationStyle) -> Void) {
