@@ -154,7 +154,8 @@ final class QuickAccessPanel: NSPanel {
             guard let self else { return }
             let before = cardScreenFrames()
             shelf.dismiss(item.id)
-            rebuild()
+            // the frame lands at once so settle measures and restores the new size, it animates the cards itself
+            rebuild(animatingFrame: false)
             settle(from: before)
         }
     }
@@ -273,7 +274,7 @@ final class QuickAccessPanel: NSPanel {
         return max(1, min(5, fitting))
     }
 
-    private func rebuild() {
+    private func rebuild(animatingFrame: Bool = true) {
         guard !shelf.ids.isEmpty, !isCaptureSuppressed else {
             orderOut(nil)
             dismissTimer?.invalidate()
@@ -315,7 +316,7 @@ final class QuickAccessPanel: NSPanel {
         let originY = bottom ? visible.minY + Self.endMargin : visible.maxY - min(height, visible.height) - Self.sideMargin
         let target = CGRect(x: x, y: originY, width: width, height: min(height, visible.height))
         // animating from wherever the panel is replaces a running entrance, which would otherwise finish at the old size and clip the new card
-        if isVisible {
+        if isVisible, animatingFrame {
             NSAnimationContext.runAnimationGroup { context in
                 context.duration = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion ? 0 : 0.2
                 context.timingFunction = CAMediaTimingFunction(controlPoints: 0.2, 0.9, 0.3, 1)
