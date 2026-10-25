@@ -81,7 +81,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         UserDefaults.standard.register(defaults: ["windowShadow": true, "shelfPosition": "bottomLeft", "filenameTemplate": "Glint {date} at {time}", "showMenuBarIcon": true,
                                                   "showMagnifier": true, "shelfScale": 1.0, "shelfFollowsPointer": true, "record.countdown": 3])
         CaptureAction.migrate()
-        _ = Updates.controller
+        _ = Updates.updater
         makeMainMenu()
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         statusItem.button?.image = Self.menuBarIcon
@@ -264,7 +264,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         menu.addItem(.separator())
         menu.addItem(HandlerMenuItem("Settings…", key: ",", symbol: "gearshape") { [weak self] in self?.showSettings() })
         menu.addItem(HandlerMenuItem("About Glint", symbol: "info.circle") { NSApp.orderFrontStandardAboutPanel(nil); NSApp.activate(ignoringOtherApps: true) })
-        menu.addItem(HandlerMenuItem("Check for Updates…", symbol: "arrow.down.circle") { Updates.controller.checkForUpdates(nil) })
+        menu.addItem(HandlerMenuItem("Check for Updates…", symbol: "arrow.down.circle") { Updates.check() })
         menu.addItem(HandlerMenuItem("Quit Glint", key: "q", symbol: "power") { NSApp.terminate(nil) })
     }
 
