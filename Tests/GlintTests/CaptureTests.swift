@@ -70,25 +70,6 @@ final class CaptureTests: XCTestCase {
         XCTAssertEqual(first.match(try ScrollRaster(image: bands(offset: 8))), .uncertain)
     }
 
-    func testAutomaticScrollStopsAtEndAndDoesNotRestartAfterStopping() {
-        var progress = AutoScrollProgress()
-        XCTAssertFalse(progress.observe(.unchanged))
-        progress.didScroll()
-        XCTAssertFalse(progress.observe(.unchanged))
-        XCTAssertFalse(progress.observe(.forward(30)))
-        XCTAssertEqual(progress.unchangedFrames, 0)
-        XCTAssertFalse(progress.observe(.unchanged))
-        XCTAssertFalse(progress.observe(.unchanged))
-        XCTAssertTrue(progress.observe(.unchanged))
-        XCTAssertTrue(progress.observe(.forward(30)))
-        var lost = AutoScrollProgress()
-        lost.didScroll()
-        XCTAssertTrue(lost.observe(.uncertain))
-        XCTAssertEqual(AutoScrollProgress.step(for: 900), 120)
-        XCTAssertEqual(AutoScrollProgress.step(for: 300), 60)
-        XCTAssertEqual(AutoScrollProgress.step(for: 2), 1)
-    }
-
     func testFixedHeaderAndFooterAppearOnlyOnce() throws {
         let page = try pattern(width: 220, height: 900)
         func viewport(at offset: Int) throws -> CGImage {

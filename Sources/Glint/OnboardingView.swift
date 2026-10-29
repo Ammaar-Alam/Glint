@@ -49,7 +49,7 @@ struct OnboardingView: View {
                         .buttonStyle(PrimaryButtonStyle())
                     }
                 }
-                SetupRow(symbol: "accessibility", title: "Accessibility", detail: accessibility ? "Allowed" : "Optional, for scrolling capture and keystrokes",
+                SetupRow(symbol: "accessibility", title: "Accessibility", detail: accessibility ? "Allowed" : "Optional, for showing keystrokes",
                          done: accessibility, celebrating: celebrating.contains(.accessibility)) {
                     Button("Allow") {
                         _ = AXIsProcessTrustedWithOptions([kAXTrustedCheckOptionPrompt.takeUnretainedValue(): true] as CFDictionary)
