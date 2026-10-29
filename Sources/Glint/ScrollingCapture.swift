@@ -150,6 +150,8 @@ final class ScrollingCaptureController {
     private var content: SCShareableContent
     private let hideDesktop: Bool
     private var panel: NSPanel?
+    private var host: FirstMouseHostingView<DoneCard>?
+    private var misses = 0
     private var continuation: CheckedContinuation<CGImage?, Error>?
     private var sampleTask: Task<Void, Never>?
     private var stitcher: ScrollStitcher?
@@ -181,6 +183,7 @@ final class ScrollingCaptureController {
 
     private func showPanel() {
         let host = FirstMouseHostingView(rootView: DoneCard { [weak self] in self?.done() })
+        self.host = host
         let panel = NSPanel(contentRect: .zero, styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
         self.panel = panel
         panel.contentView = host
@@ -232,6 +235,7 @@ final class ScrollingCaptureController {
                 let image = try await CaptureFrame.region(rect, content: content, showsCursor: false, hideDesktop: hideDesktop)
                 guard !finishing, !Task.isCancelled else { break }
                 var moved = false
+                var lost = false
                 if let current = stitcher {
                     let (updated, match) = try await Task.detached(priority: .userInitiated) {
                         var updated = current
@@ -241,10 +245,16 @@ final class ScrollingCaptureController {
                     guard !finishing, !Task.isCancelled else { break }
                     stitcher = updated
                     if case .forward = match { moved = true }
+                    // a jump past the overlap leaves nothing to stitch to until the person scrolls back
+                    misses = match == .uncertain ? misses + 1 : 0
+                    lost = misses >= 8
+                    if host?.rootView.lost != lost { host?.rootView.lost = lost }
                 } else {
                     stitcher = try await Task.detached(priority: .userInitiated) { try ScrollStitcher(image: image) }.value
                 }
-                if moved {
+                if lost {
+                    dim(false)
+                } else if moved {
                     lastMove = .now
                     dim(true)
                 } else if ContinuousClock.now - lastMove > .seconds(0.6) {
@@ -284,22 +294,30 @@ final class ScrollingCaptureController {
 }
 
 // the same white card as the capture bar so one can become the other
-private struct DoneCard: View {
+struct DoneCard: View {
     let action: () -> Void
+    var lost = false
     @State private var shown = false
 
     var body: some View {
-        Button("Done", action: action)
-            .buttonStyle(PrimaryButtonStyle())
-            .opacity(shown ? 1 : 0)
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .background {
-                RoundedRectangle(cornerRadius: 14, style: .continuous)
-                    .fill(Color.white)
-                    .shadow(color: .black.opacity(0.16), radius: 16, y: 5)
+        Button(action: action) {
+            HStack(spacing: 4) {
+                if lost { Image(systemName: "arrow.up").font(.system(size: 11, weight: .bold)) }
+                Text("Done")
             }
-            .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).strokeBorder(Color.black.opacity(0.08)))
-            .padding(20)
-            .onAppear { withAnimation(.easeOut(duration: 0.2).delay(0.15)) { shown = true } }
+        }
+        .buttonStyle(PrimaryButtonStyle())
+        .accessibilityHint(lost ? "Scroll back up to continue the capture" : "")
+        .animation(.snappy(duration: 0.16), value: lost)
+        .opacity(shown ? 1 : 0)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background {
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .fill(Color.white)
+                .shadow(color: .black.opacity(0.16), radius: 16, y: 5)
+        }
+        .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).strokeBorder(Color.black.opacity(0.08)))
+        .padding(20)
+        .onAppear { withAnimation(.easeOut(duration: 0.2).delay(0.15)) { shown = true } }
     }
 }
