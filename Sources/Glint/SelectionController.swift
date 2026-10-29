@@ -371,11 +371,16 @@ final class SelectionController {
     }
 
     private func changeMode(_ newMode: CaptureMode) {
+        // a drawn area stays put when switching to another area-based mode
+        let areaModes: [CaptureMode] = [.area, .scrolling, .text]
+        let keepsArea = areaModes.contains(mode) && areaModes.contains(newMode)
         mode = newMode
         selectedWindow = nil
         windowSelectionLocked = false
-        regionSelectionLocked = false
-        selection = nil
+        if !keepsArea {
+            regionSelectionLocked = false
+            selection = nil
+        }
         start = nil
         drag = nil
         move(to: lastPointer, modifiers: [])
