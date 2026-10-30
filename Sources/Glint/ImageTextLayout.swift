@@ -2,6 +2,15 @@ import Foundation
 @preconcurrency import Vision
 import CoreGraphics
 
+extension VNImageRequestHandler {
+    // Vision blocks its thread, so it runs outside the shared async threads where a stalled request would starve other tasks
+    func performInBackground(_ requests: [VNRequest]) async throws {
+        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+            DispatchQueue.global(qos: .userInitiated).async { continuation.resume(with: Result { try self.perform(requests) }) }
+        }
+    }
+}
+
 enum ImageTextLayout {
     static func wordBoxes(in image: CGImage) async throws -> [CGRect] {
         try Task.checkCancellation()
@@ -11,7 +20,7 @@ enum ImageTextLayout {
         request.automaticallyDetectsLanguage = true
         return try await withTaskCancellationHandler {
             try Task.checkCancellation()
-            do { try VNImageRequestHandler(cgImage: image, options: [:]).perform([request]) }
+            do { try await VNImageRequestHandler(cgImage: image, options: [:]).performInBackground([request]) }
             catch { try Task.checkCancellation(); throw error }
             var boxes: [CGRect] = []
             for observation in request.results ?? [] {
