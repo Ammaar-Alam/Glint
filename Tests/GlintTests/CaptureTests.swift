@@ -47,27 +47,16 @@ final class CaptureTests: XCTestCase {
         let first = try XCTUnwrap(page.cropping(to: CGRect(x: 0, y: 0, width: 220, height: 420)))
         let second = try XCTUnwrap(page.cropping(to: CGRect(x: 0, y: 120, width: 220, height: 420)))
         let third = try XCTUnwrap(page.cropping(to: CGRect(x: 0, y: 184, width: 220, height: 420)))
-        var stitcher = try ScrollStitcher(image: first, axis: .vertical)
+        var stitcher = try ScrollStitcher(image: first)
         XCTAssertEqual(try stitcher.append(first), .unchanged)
         XCTAssertEqual(try stitcher.append(second), .forward(120))
         XCTAssertEqual(try stitcher.append(third), .forward(64))
+        XCTAssertEqual(try stitcher.append(second), .backward)
         XCTAssertEqual(stitcher.frameCount, 3)
         XCTAssertEqual(stitcher.length, 604)
         let output = try stitcher.render()
         let expected = try XCTUnwrap(page.cropping(to: CGRect(x: 0, y: 0, width: 220, height: 604)))
         XCTAssertEqual(try pixels(output), try pixels(expected))
-    }
-
-    func testHorizontalStitchAndBackwardMotion() throws {
-        let page = try pattern(width: 850, height: 200)
-        let first = try XCTUnwrap(page.cropping(to: CGRect(x: 0, y: 0, width: 400, height: 200)))
-        let second = try XCTUnwrap(page.cropping(to: CGRect(x: 90, y: 0, width: 400, height: 200)))
-        var stitcher = try ScrollStitcher(image: first, axis: .horizontal)
-        XCTAssertEqual(try stitcher.append(second), .forward(90))
-        XCTAssertEqual(try stitcher.append(first), .backward)
-        XCTAssertEqual(stitcher.length, 490)
-        let expected = try XCTUnwrap(page.cropping(to: CGRect(x: 0, y: 0, width: 490, height: 200)))
-        XCTAssertEqual(try pixels(stitcher.render()), try pixels(expected))
     }
 
     func testRepeatedRowsDoNotInventAnOverlap() throws {
@@ -77,27 +66,8 @@ final class CaptureTests: XCTestCase {
             let values = (0..<(width * height)).map { index in UInt8(((index / width + offset) / 8) % 2 == 0 ? 30 : 230) }
             return try grayImage(values, width: width, height: height)
         }
-        let first = try ScrollRaster(image: bands(offset: 0), axis: .vertical)
-        XCTAssertEqual(first.match(try ScrollRaster(image: bands(offset: 8), axis: .vertical)), .uncertain)
-    }
-
-    func testAutomaticScrollStopsAtEndAndDoesNotRestartAfterStopping() {
-        var progress = AutoScrollProgress()
-        XCTAssertFalse(progress.observe(.unchanged))
-        progress.didScroll()
-        XCTAssertFalse(progress.observe(.unchanged))
-        XCTAssertFalse(progress.observe(.forward(30)))
-        XCTAssertEqual(progress.unchangedFrames, 0)
-        XCTAssertFalse(progress.observe(.unchanged))
-        XCTAssertFalse(progress.observe(.unchanged))
-        XCTAssertTrue(progress.observe(.unchanged))
-        XCTAssertTrue(progress.observe(.forward(30)))
-        var lost = AutoScrollProgress()
-        lost.didScroll()
-        XCTAssertTrue(lost.observe(.uncertain))
-        XCTAssertEqual(AutoScrollProgress.step(for: CGSize(width: 300, height: 900), axis: .vertical), 120)
-        XCTAssertEqual(AutoScrollProgress.step(for: CGSize(width: 300, height: 900), axis: .horizontal), 60)
-        XCTAssertEqual(AutoScrollProgress.step(for: CGSize(width: 2, height: 2), axis: .vertical), 1)
+        let first = try ScrollRaster(image: bands(offset: 0))
+        XCTAssertEqual(first.match(try ScrollRaster(image: bands(offset: 8))), .uncertain)
     }
 
     func testFixedHeaderAndFooterAppearOnlyOnce() throws {
@@ -113,7 +83,7 @@ final class CaptureTests: XCTestCase {
             context.fill(CGRect(x: 0, y: 0, width: 220, height: 30))
             return try XCTUnwrap(context.makeImage())
         }
-        var stitcher = try ScrollStitcher(image: viewport(at: 0), axis: .vertical)
+        var stitcher = try ScrollStitcher(image: viewport(at: 0))
         XCTAssertEqual(try stitcher.append(viewport(at: 120)), .forward(120))
         let output = try stitcher.render()
         let stitchedMiddle = try XCTUnwrap(output.cropping(to: CGRect(x: 0, y: 30, width: 220, height: 480)))

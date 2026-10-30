@@ -96,6 +96,8 @@ final class SelectionController {
     private var moveObserver: NSObjectProtocol?
     // where the bar was dragged to, as a share of the screen so it holds across displays
     private static let placementKey = "captureBarPlacement"
+    // where the bar's card sat when the overlay closed so what follows can take its place
+    static private(set) var lastBarFrame: CGRect?
     private var showsLoupe = false
     private var toolbar: SelectionPanel?
     private var isWindowSelection: Bool { mode == .window }
@@ -186,8 +188,8 @@ final class SelectionController {
                 let point = NSEvent.mouseLocation
                 lastPointer = point
                 focusOverlay()
-                // plain shortcuts capture on release, only the all-in-one bar has choices to make
-                if allInOne { showToolbar() }
+                // plain shortcuts capture on release, the all-in-one bar waits for a drawn area unless recording
+                if allInOne && bar.recording { showToolbar() }
                 move(to: point, modifiers: [])
                 loadSnapshots()
             }
@@ -371,11 +373,16 @@ final class SelectionController {
     }
 
     private func changeMode(_ newMode: CaptureMode) {
+        // a drawn area stays put when switching to another area-based mode
+        let areaModes: [CaptureMode] = [.area, .scrolling, .text]
+        let keepsArea = areaModes.contains(mode) && areaModes.contains(newMode)
         mode = newMode
         selectedWindow = nil
         windowSelectionLocked = false
-        regionSelectionLocked = false
-        selection = nil
+        if !keepsArea {
+            regionSelectionLocked = false
+            selection = nil
+        }
         start = nil
         drag = nil
         move(to: lastPointer, modifiers: [])
@@ -429,6 +436,7 @@ final class SelectionController {
             view.showsMagnifier = showsLoupe && selecting && !isWindowSelection && mode != .fullScreen && view.screenFrame.contains(pointer)
             view.refresh()
         }
+        if allInOne, toolbar == nil, regionSelectionLocked { showToolbar() }
         layoutToolbar(hidden: start != nil || drag != nil)
     }
 
@@ -478,6 +486,8 @@ final class SelectionController {
         snapshotTask = nil
         if let moveObserver { NotificationCenter.default.removeObserver(moveObserver) }
         moveObserver = nil
+        // the card sits inside the bar window's 20 point shadow margin
+        Self.lastBarFrame = toolbarVisible ? toolbar?.frame.insetBy(dx: 20, dy: 20) : nil
         toolbar?.orderOut(nil)
         toolbar?.close()
         toolbar = nil

@@ -1,9 +1,6 @@
 import AppKit
 import ScreenCaptureKit
-
-enum ScrollAxis: Int, CaseIterable {
-    case vertical, horizontal
-}
+import SwiftUI
 
 enum ScrollMatch: Equatable {
     case unchanged
@@ -12,63 +9,24 @@ enum ScrollMatch: Equatable {
     case uncertain
 }
 
-struct AutoScrollProgress {
-    private(set) var unchangedFrames = 0
-    private(set) var stopped = false
-    private var hasScrolled = false
-
-    mutating func didScroll() { hasScrolled = true }
-
-    mutating func observe(_ match: ScrollMatch) -> Bool {
-        guard !stopped else { return true }
-        guard hasScrolled else { return false }
-        switch match {
-        case .forward: unchangedFrames = 0
-        case .unchanged:
-            unchangedFrames += 1
-            stopped = unchangedFrames >= 3
-        case .uncertain, .backward: stopped = true
-        }
-        return stopped
-    }
-
-    mutating func stop() { stopped = true }
-
-    static func step(for viewport: CGSize, axis: ScrollAxis) -> Int32 {
-        let length = axis == .vertical ? viewport.height : viewport.width
-        guard length.isFinite, length > 0 else { return 1 }
-        return Int32(max(1, min(120, length / 5)).rounded(.down))
-    }
-}
-
 struct ScrollRaster {
     let values: [UInt8]
     let length: Int
     let breadth: Int
 
-    init(image: CGImage, axis: ScrollAxis) throws {
-        let width = axis == .vertical ? min(96, image.width) : image.width
-        let height = axis == .vertical ? image.height : min(96, image.height)
-        guard let context = CGContext(data: nil, width: width, height: height, bitsPerComponent: 8, bytesPerRow: width,
+    init(image: CGImage) throws {
+        length = image.height
+        breadth = min(96, image.width)
+        guard let context = CGContext(data: nil, width: breadth, height: length, bitsPerComponent: 8, bytesPerRow: breadth,
                                       space: CGColorSpaceCreateDeviceGray(), bitmapInfo: CGImageAlphaInfo.none.rawValue) else {
             throw GlintError.message("The scrolling capture couldn’t be analyzed.")
         }
         context.interpolationQuality = .medium
-        context.draw(image, in: CGRect(x: 0, y: 0, width: width, height: height))
+        context.draw(image, in: CGRect(x: 0, y: 0, width: breadth, height: length))
         guard let data = context.data?.assumingMemoryBound(to: UInt8.self) else {
             throw GlintError.message("The scrolling capture couldn’t be read.")
         }
-        length = axis == .vertical ? height : width
-        breadth = axis == .vertical ? width : height
-        if axis == .vertical {
-            values = Array(UnsafeBufferPointer(start: data, count: width * height))
-        } else {
-            var transposed = [UInt8](repeating: 0, count: width * height)
-            for x in 0..<width {
-                for y in 0..<height { transposed[x * height + y] = data[y * width + x] }
-            }
-            values = transposed
-        }
+        values = Array(UnsafeBufferPointer(start: data, count: breadth * length))
     }
 
     func match(_ next: ScrollRaster) -> ScrollMatch {
@@ -115,7 +73,6 @@ struct ScrollRaster {
 }
 
 struct ScrollStitcher {
-    let axis: ScrollAxis
     let first: CGImage
     private var previous: ScrollRaster
     private var strips: [CGImage] = []
@@ -125,37 +82,26 @@ struct ScrollStitcher {
     private(set) var frameCount = 1
     private let maximumPixels = 48_000_000
 
-    init(image: CGImage, axis: ScrollAxis) throws {
-        self.axis = axis
+    init(image: CGImage) throws {
         first = image
-        previous = try ScrollRaster(image: image, axis: axis)
-        length = axis == .vertical ? image.height : image.width
+        previous = try ScrollRaster(image: image)
+        length = image.height
         edgeInset = max(1, min(160, length / 8))
-        let tailRect = axis == .vertical
-            ? CGRect(x: 0, y: image.height - edgeInset, width: image.width, height: edgeInset)
-            : CGRect(x: image.width - edgeInset, y: 0, width: edgeInset, height: image.height)
-        tail = try Self.copy(image, rect: tailRect)
+        tail = try Self.copy(image, rect: CGRect(x: 0, y: image.height - edgeInset, width: image.width, height: edgeInset))
     }
 
     mutating func append(_ image: CGImage) throws -> ScrollMatch {
         guard image.width == first.width, image.height == first.height else {
-            throw GlintError.message("The screen resolution changed. Finish this capture and start another.")
+            throw GlintError.message("The screen resolution changed.")
         }
-        let raster = try ScrollRaster(image: image, axis: axis)
+        let raster = try ScrollRaster(image: image)
         let match = previous.match(raster)
         guard case .forward(let distance) = match else { return match }
-        let breadth = axis == .vertical ? first.width : first.height
-        guard length + distance <= 32_768, (length + distance) * breadth <= maximumPixels else {
-            throw GlintError.message("This capture reached its size limit. Finish to save it, then start another.")
+        guard length + distance <= 32_768, (length + distance) * first.width <= maximumPixels else {
+            throw GlintError.message("This capture reached its size limit.")
         }
-        let rect = axis == .vertical
-            ? CGRect(x: 0, y: image.height - edgeInset - distance, width: image.width, height: distance)
-            : CGRect(x: image.width - edgeInset - distance, y: 0, width: distance, height: image.height)
-        let strip = try Self.copy(image, rect: rect)
-        let tailRect = axis == .vertical
-            ? CGRect(x: 0, y: image.height - edgeInset, width: image.width, height: edgeInset)
-            : CGRect(x: image.width - edgeInset, y: 0, width: edgeInset, height: image.height)
-        let latestTail = try Self.copy(image, rect: tailRect)
+        let strip = try Self.copy(image, rect: CGRect(x: 0, y: image.height - edgeInset - distance, width: image.width, height: distance))
+        let latestTail = try Self.copy(image, rect: CGRect(x: 0, y: image.height - edgeInset, width: image.width, height: edgeInset))
         strips.append(strip)
         tail = latestTail
         length += distance
@@ -165,23 +111,17 @@ struct ScrollStitcher {
     }
 
     func render() throws -> CGImage {
-        let width = axis == .vertical ? first.width : length
-        let height = axis == .vertical ? length : first.height
-        guard let context = Self.context(width: width, height: height) else {
+        guard let context = Self.context(width: first.width, height: length) else {
             throw GlintError.message("There isn’t enough memory to finish this scrolling capture.")
         }
-        let leadingRect = axis == .vertical
-            ? CGRect(x: 0, y: 0, width: first.width, height: first.height - edgeInset)
-            : CGRect(x: 0, y: 0, width: first.width - edgeInset, height: first.height)
-        guard let leading = first.cropping(to: leadingRect) else { throw GlintError.message("The first frame couldn’t be read.") }
+        guard let leading = first.cropping(to: CGRect(x: 0, y: 0, width: first.width, height: first.height - edgeInset)) else {
+            throw GlintError.message("The first frame couldn’t be read.")
+        }
         var offset = 0
         // Only the newest trailing edge is kept so fixed footers are not repeated
         for image in [leading] + strips + [tail] {
-            let rect = axis == .vertical
-                ? CGRect(x: 0, y: height - offset - image.height, width: image.width, height: image.height)
-                : CGRect(x: offset, y: 0, width: image.width, height: image.height)
-            context.draw(image, in: rect)
-            offset += axis == .vertical ? image.height : image.width
+            context.draw(image, in: CGRect(x: 0, y: length - offset - image.height, width: image.width, height: image.height))
+            offset += image.height
         }
         guard let image = context.makeImage() else { throw GlintError.message("The capture couldn’t be rendered.") }
         return image
@@ -205,24 +145,18 @@ struct ScrollStitcher {
 }
 
 @MainActor
-final class ScrollingCaptureController: NSObject {
+final class ScrollingCaptureController {
     private let rect: CGRect
     private var content: SCShareableContent
     private let hideDesktop: Bool
     private var panel: NSPanel?
+    private var host: FirstMouseHostingView<DoneCard>?
+    private var misses = 0
     private var continuation: CheckedContinuation<CGImage?, Error>?
     private var sampleTask: Task<Void, Never>?
     private var stitcher: ScrollStitcher?
-    private var running = false
     private var finishing = false
-    private var misses = 0
-    private let status = NSTextField(wrappingLabelWithString: "Scroll slowly within the selected area.")
-    private let direction = NSSegmentedControl(labels: ["Vertical", "Horizontal"], trackingMode: .selectOne, target: nil, action: nil)
-    private let startButton = NSButton()
-    private let finishButton = NSButton()
-    private let autoButton = NSButton(checkboxWithTitle: "Auto", target: nil, action: nil)
-    private var autoProgress = AutoScrollProgress()
-    private var autoTarget: (pid: pid_t, window: CGWindowID)?
+    private var dimmed = false
 
     private init(rect: CGRect, content: SCShareableContent, hideDesktop: Bool) {
         self.rect = rect
@@ -240,6 +174,7 @@ final class ScrollingCaptureController: NSObject {
             try await withCheckedThrowingContinuation { continuation in
                 self.continuation = continuation
                 showPanel()
+                sampleTask = Task { [weak self] in await self?.sample() }
             }
         } onCancel: {
             Task { @MainActor [weak self] in self?.complete(.success(nil)) }
@@ -247,218 +182,142 @@ final class ScrollingCaptureController: NSObject {
     }
 
     private func showPanel() {
-        let panel = NSPanel(contentRect: CGRect(x: 0, y: 0, width: 360, height: 148), styleMask: [.titled, .nonactivatingPanel], backing: .buffered, defer: false)
+        let host = FirstMouseHostingView(rootView: DoneCard { [weak self] in self?.done() })
+        self.host = host
+        let panel = NSPanel(contentRect: .zero, styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
         self.panel = panel
-        panel.title = "Scrolling Capture"
+        panel.contentView = host
+        panel.backgroundColor = .clear
+        panel.isOpaque = false
+        panel.hasShadow = false
         panel.isReleasedWhenClosed = false
         panel.hidesOnDeactivate = false
         panel.level = .floating
         panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
-        direction.selectedSegment = 0
-        direction.frame = CGRect(x: 16, y: 108, width: 220, height: 24)
-        autoButton.frame = CGRect(x: 256, y: 108, width: 88, height: 24)
-        autoButton.target = self
-        autoButton.action = #selector(toggleAutomatic)
-        autoButton.setAccessibilityLabel("Automatic scrolling")
-        status.frame = CGRect(x: 16, y: 52, width: 328, height: 44)
-        status.font = .systemFont(ofSize: 12)
-        startButton.title = "Start"
-        startButton.target = self
-        startButton.action = #selector(toggleCapture)
-        startButton.frame = CGRect(x: 16, y: 14, width: 92, height: 28)
-        startButton.bezelStyle = .rounded
-        finishButton.title = "Finish"
-        finishButton.target = self
-        finishButton.action = #selector(finishCapture)
-        finishButton.frame = CGRect(x: 124, y: 14, width: 100, height: 28)
-        finishButton.bezelStyle = .rounded
-        finishButton.isEnabled = false
-        let cancel = NSButton(title: "Cancel", target: self, action: #selector(cancelCapture))
-        cancel.frame = CGRect(x: 240, y: 14, width: 104, height: 28)
-        cancel.bezelStyle = .rounded
-        cancel.keyEquivalent = "\u{1b}"
-        for view in [direction, autoButton, status, startButton, finishButton, cancel] { panel.contentView?.addSubview(view) }
-        panel.center()
+        let card = CGSize(width: 96, height: 44)
         let cocoaRect = CaptureGeometry.cocoaRect(fromQuartz: rect, primaryHeight: CGDisplayBounds(CGMainDisplayID()).height)
-        if let screen = NSScreen.screens.first(where: { $0.frame.intersects(cocoaRect) }) {
-            panel.setFrameOrigin(CGPoint(x: screen.visibleFrame.maxX - panel.frame.width - 20, y: screen.visibleFrame.minY + 20))
-        }
+        let screen = (NSScreen.screens.first { $0.frame.intersects(cocoaRect) } ?? NSScreen.screens[0]).visibleFrame
+        // the bar shrinks into Done where it stood, without a bar Done sits where the bar would have
+        let bar = SelectionController.lastBarFrame
+        let from = bar ?? CGRect(origin: CaptureGeometry.attach(card, to: cocoaRect, within: screen), size: card)
+        let to = CGRect(x: (from.midX - card.width / 2).rounded(), y: (from.midY - card.height / 2).rounded(), width: card.width, height: card.height)
+        panel.setFrame(from.insetBy(dx: -20, dy: -20), display: true)
+        panel.alphaValue = bar == nil ? 0 : 1
         panel.orderFrontRegardless()
+        NSAnimationContext.runAnimationGroup { context in
+            context.duration = 0.3
+            context.timingFunction = CAMediaTimingFunction(controlPoints: 0.2, 0.9, 0.3, 1)
+            panel.animator().setFrame(to.insetBy(dx: -20, dy: -20), display: true)
+            panel.animator().alphaValue = 1
+        }
     }
 
-    @objc private func toggleAutomatic() {
-        autoProgress = AutoScrollProgress()
-        autoTarget = nil
-        guard autoButton.state == .on else { return }
-        guard AXIsProcessTrusted() else {
-            autoButton.state = .off
-            status.stringValue = "Auto requires Accessibility access in System Settings. Manual capture is still available."
-            return
+    // steps back while the page moves and returns once it settles
+    private func dim(_ value: Bool) {
+        guard let panel, value != dimmed else { return }
+        dimmed = value
+        NSAnimationContext.runAnimationGroup { context in
+            context.duration = 0.2
+            panel.animator().alphaValue = value ? 0.25 : 1
         }
-        guard let target = windowAtCapturePoint(), NSWorkspace.shared.frontmostApplication?.processIdentifier == target.pid else {
-            autoButton.state = .off
-            status.stringValue = "Activate the window inside your capture, then enable Auto."
-            return
-        }
-        autoTarget = target
-        status.stringValue = running ? "Automatic scrolling" : "Ready for automatic scrolling."
+        // scrolling over a faded button still reaches the page
+        panel.ignoresMouseEvents = value
     }
 
-    private func windowAtCapturePoint() -> (pid: pid_t, window: CGWindowID)? {
-        let point = CGPoint(x: rect.midX, y: rect.midY)
-        let windows = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]] ?? []
-        for window in windows {
-            guard let pid = (window[kCGWindowOwnerPID as String] as? NSNumber)?.int32Value,
-                  pid != ProcessInfo.processInfo.processIdentifier,
-                  (window[kCGWindowLayer as String] as? NSNumber)?.intValue == 0,
-                  (window[kCGWindowAlpha as String] as? NSNumber)?.doubleValue ?? 1 > 0,
-                  let identifier = (window[kCGWindowNumber as String] as? NSNumber)?.uint32Value,
-                  let bounds = window[kCGWindowBounds as String] as? [String: Any],
-                  let frame = CGRect(dictionaryRepresentation: bounds as CFDictionary), frame.contains(point) else { continue }
-            return (pid, identifier)
-        }
-        return nil
-    }
-
-    private func scrollAutomatically(axis: ScrollAxis) {
-        guard autoButton.state == .on, running, !finishing, continuation != nil, !Task.isCancelled, !autoProgress.stopped else { return }
-        guard AXIsProcessTrusted(), let target = autoTarget,
-              NSWorkspace.shared.frontmostApplication?.processIdentifier == target.pid,
-              let current = windowAtCapturePoint(), current.pid == target.pid, current.window == target.window else {
-            pauseAutomatic("Automatic scrolling paused because the selected window changed.")
-            return
-        }
-        let step = AutoScrollProgress.step(for: rect.size, axis: axis)
-        guard let source = CGEventSource(stateID: .privateState),
-              let event = CGEvent(scrollWheelEvent2Source: source, units: .pixel, wheelCount: 2,
-                                  wheel1: axis == .vertical ? -step : 0, wheel2: axis == .horizontal ? -step : 0, wheel3: 0) else {
-            pauseAutomatic("Automatic scrolling isn’t available. You can continue manually.")
-            return
-        }
-        event.location = CGPoint(x: rect.midX, y: rect.midY)
-        event.flags = []
-        event.setIntegerValueField(.mouseEventWindowUnderMousePointer, value: Int64(target.window))
-        event.setIntegerValueField(.mouseEventWindowUnderMousePointerThatCanHandleThisEvent, value: Int64(target.window))
-        event.postToPid(target.pid)
-        autoProgress.didScroll()
-    }
-
-    private func pauseAutomatic(_ message: String) {
-        autoProgress.stop()
-        autoButton.state = .off
-        autoTarget = nil
-        running = false
-        startButton.title = "Resume"
-        status.stringValue = message
-    }
-
-    @objc private func toggleCapture() {
-        guard !finishing else { return }
-        if running {
-            running = false
-            sampleTask?.cancel()
-            startButton.title = "Resume"
-            status.stringValue = "Paused"
-            return
-        }
-        running = true
-        autoProgress = AutoScrollProgress()
-        direction.isEnabled = false
-        startButton.title = "Pause"
-        status.stringValue = autoButton.state == .on ? "Automatic scrolling" : "Scroll slowly within the selected area."
-        misses = 0
-        sampleTask = Task { [weak self] in await self?.sample() }
-    }
-
+    // samples about once a frame so fast scrolling still overlaps the previous view
     private func sample() async {
-        while running && !finishing && !Task.isCancelled {
+        var lastMove = ContinuousClock.now
+        while !finishing && !Task.isCancelled {
             do {
                 if stitcher == nil {
                     content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true)
                 }
                 let image = try await CaptureFrame.region(rect, content: content, showsCursor: false, hideDesktop: hideDesktop)
-                guard running, !finishing, !Task.isCancelled else { break }
-                let axis = ScrollAxis(rawValue: direction.selectedSegment) ?? .vertical
+                guard !finishing, !Task.isCancelled else { break }
+                var moved = false
+                var lost = false
                 if let current = stitcher {
                     let (updated, match) = try await Task.detached(priority: .userInitiated) {
                         var updated = current
                         let match = try updated.append(image)
                         return (updated, match)
                     }.value
-                    guard running, !finishing, !Task.isCancelled else { break }
+                    guard !finishing, !Task.isCancelled else { break }
                     stitcher = updated
-                    if autoButton.state == .on, autoProgress.observe(match) {
-                        pauseAutomatic(match == .unchanged ? "End of scrolling reached. Finish to save your capture." : "Alignment lost. Scroll back slightly, then resume or finish.")
-                        break
-                    }
-                    switch match {
-                    case .forward:
-                        misses = 0
-                        status.stringValue = "\(updated.frameCount) frames · \(updated.length) px"
-                    case .unchanged: break
-                    case .backward:
-                        status.stringValue = "Scroll forward to continue."
-                    case .uncertain:
-                        misses += 1
-                        status.stringValue = "Couldn’t align this view. Scroll back slightly or finish the current capture."
-                        if misses >= 12 {
-                            running = false
-                            startButton.title = "Resume"
-                        }
-                    }
+                    if case .forward = match { moved = true }
+                    // a jump past the overlap leaves nothing to stitch to until the person scrolls back
+                    misses = match == .uncertain ? misses + 1 : 0
+                    lost = misses >= 8
+                    if host?.rootView.lost != lost { host?.rootView.lost = lost }
                 } else {
-                    stitcher = try await Task.detached(priority: .userInitiated) { try ScrollStitcher(image: image, axis: axis) }.value
-                    finishButton.isEnabled = true
+                    stitcher = try await Task.detached(priority: .userInitiated) { try ScrollStitcher(image: image) }.value
                 }
-                scrollAutomatically(axis: axis)
-                try await Task.sleep(for: .milliseconds(250))
+                if lost {
+                    dim(false)
+                } else if moved {
+                    lastMove = .now
+                    dim(true)
+                } else if ContinuousClock.now - lastMove > .seconds(0.6) {
+                    dim(false)
+                }
+                try await Task.sleep(for: .milliseconds(16))
             } catch is CancellationError {
                 break
             } catch {
-                running = false
-                startButton.title = "Resume"
-                status.stringValue = error.localizedDescription
-                if stitcher == nil { direction.isEnabled = true }
+                // a size limit or a changed screen keeps what was already captured
+                if stitcher == nil { complete(.failure(error)) } else { done() }
+                break
             }
         }
     }
 
-    @objc private func finishCapture() {
-        guard let stitcher, !finishing else { return }
+    private func done() {
+        guard !finishing else { return }
+        guard let stitcher else { complete(.success(nil)); return }
         finishing = true
-        running = false
         sampleTask?.cancel()
-        autoProgress.stop()
-        autoButton.isEnabled = false
-        startButton.isEnabled = false
-        finishButton.isEnabled = false
-        status.stringValue = "Saving…"
         Task {
-            do {
-                let image = try await Task.detached(priority: .userInitiated) { try stitcher.render() }.value
-                complete(.success(image))
-            } catch {
-                finishing = false
-                startButton.isEnabled = true
-                autoButton.isEnabled = true
-                finishButton.isEnabled = true
-                status.stringValue = error.localizedDescription
-            }
+            do { complete(.success(try await Task.detached(priority: .userInitiated) { try stitcher.render() }.value)) }
+            catch { complete(.failure(error)) }
         }
     }
-
-    @objc private func cancelCapture() { complete(.success(nil)) }
 
     private func complete(_ result: Result<CGImage?, Error>) {
         guard let continuation else { return }
         self.continuation = nil
-        running = false
-        autoProgress.stop()
-        autoTarget = nil
         sampleTask?.cancel()
         panel?.orderOut(nil)
         panel?.close()
         panel = nil
         continuation.resume(with: result)
+    }
+}
+
+// the same white card as the capture bar so one can become the other
+struct DoneCard: View {
+    let action: () -> Void
+    var lost = false
+    @State private var shown = false
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 4) {
+                if lost { Image(systemName: "arrow.up").font(.system(size: 11, weight: .bold)) }
+                Text("Done")
+            }
+        }
+        .buttonStyle(PrimaryButtonStyle())
+        .accessibilityHint(lost ? "Scroll back up to continue the capture" : "")
+        .animation(.snappy(duration: 0.16), value: lost)
+        .opacity(shown ? 1 : 0)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background {
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .fill(Color.white)
+                .shadow(color: .black.opacity(0.16), radius: 16, y: 5)
+        }
+        .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).strokeBorder(Color.black.opacity(0.08)))
+        .padding(20)
+        .onAppear { withAnimation(.easeOut(duration: 0.2).delay(0.15)) { shown = true } }
     }
 }
