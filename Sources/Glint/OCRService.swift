@@ -12,7 +12,7 @@ enum OCRService {
             let codes = VNDetectBarcodesRequest()
             codes.symbologies = [.qr]
             let handler = VNImageRequestHandler(url: url, options: [:])
-            try handler.perform([text, codes])
+            try await handler.performInBackground([text, codes])
             try Task.checkCancellation()
             let recognized = (text.results ?? []).compactMap { $0.topCandidates(1).first?.string }.joined(separator: "\n")
             let payloads = (codes.results ?? []).compactMap(\.payloadStringValue)
